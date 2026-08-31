@@ -19,14 +19,19 @@ The result JSON shape matches apps/web/src/lib/types.ts exactly.
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import sys
+import time
 import uuid
-from typing import Dict
+from typing import Dict, Optional
 
 # Ensure local imports work whether uvicorn is launched from
 # services/inference/ or from the repo root.
 sys.path.insert(0, os.path.dirname(__file__))
+
+logger = logging.getLogger(__name__)
 
 import cv2
 import numpy as np
@@ -39,8 +44,19 @@ from cv.first_pass import run_first_pass, PROFILES  # type: ignore
 from cv.tools import TOOL_REGISTRY  # type: ignore
 from cv.policy import decide  # type: ignore
 from agent.tool_selector import select_tool  # type: ignore
+from storage import create_job_store, InMemoryJobStore  # type: ignore
 
 app = FastAPI(title="LoopSight Inference", version="0.1.0")
+
+# Lambda adapter — wraps the same FastAPI app for AWS Lambda's handler interface.
+# Leave every existing route/logic untouched; locally uvicorn still runs the app directly.
+# Added for Phase 4 Lambda deployment (always-free tier); not pursuing Best Use of COOL.
+try:
+    from mangum import Mangum  # type: ignore
+
+    handler = Mangum(app)
+except Exception:  # mangum not installed in some local envs — still allow `uvicorn main:app`
+    handler = None  # type: ignore
 
 # Enable CORS for the Next.js dev server (http://localhost:3000)
 app.add_middleware(
@@ -51,8 +67,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory job store: job_id -> InspectionResult dict (exact shape from types.ts)
+# In-memory job store (default) — wrapped by the JobStore abstraction.
+# This dict is the backing store for InMemoryJobStore and the default when no AWS credentials are present.
 JOBS: Dict[str, dict] = {}
+
+# JobStore abstraction — picks InMemory vs Dynamo at startup based on env/credentials.
+# See storage.py: InMemoryJobStore wraps JOBS; DynamoJobStore uses boto3 only if credentials resolvable.
+store = create_job_store(JOBS)
 
 
 def _decode_image(data: bytes) -> np.ndarray:
@@ -166,7 +187,16 @@ def _run_tool(tool_call, frame: np.ndarray, reference: np.ndarray | None, roi: t
 
 @app.get("/")
 async def health():
-    return {"status": "ok", "service": "loopsight-inference", "jobs": len(JOBS)}
+    # Report job count from the active store; for InMemory it's len(JOBS), for Dynamo it's not cheap to count
+    try:
+        if isinstance(store, InMemoryJobStore):
+            count = len(store.store)
+        else:
+            # Dynamo — avoid expensive Scan; report backing dict size (0) and store type
+            count = 0
+    except Exception:
+        count = 0
+    return {"status": "ok", "service": "loopsight-inference", "jobs": count, "store": type(store).__name__}
 
 
 @app.get("/health")
@@ -183,7 +213,17 @@ async def inspect(request: Request):
 
     Runs the real CV pipeline, returns { job_id } and stores the full
     InspectionResult for later retrieval via GET /jobs/{job_id}.
+
+    Timing instrumentation (Phase 5): wall-clock for decode, first_pass,
+    agent call (if fired), second_pass, and total — logged as a structured
+    JSON line and stored in result["measurements"] for Experiment D (COOL baseline comparison).
     """
+    t_total_start = time.perf_counter()
+    decode_ms: Optional[float] = None
+    first_pass_ms: Optional[float] = None
+    agent_ms: Optional[float] = None
+    second_pass_ms: Optional[float] = None
+
     form = await request.form()
 
     # Accept both 'image' (frontend) and 'file' (generic clients/curl) field names
@@ -219,11 +259,13 @@ async def inspect(request: Request):
     if not data:
         raise HTTPException(status_code=400, detail="image file is empty")
 
-    # Decode image via OpenCV
+    # Decode image via OpenCV — timed for Experiment D
+    t0 = time.perf_counter()
     try:
         frame = _decode_image(data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    decode_ms = (time.perf_counter() - t0) * 1000
 
     h, w = frame.shape[:2]
     # Single ROI covering the full image — simple, matches synthetic test harness.
@@ -231,8 +273,10 @@ async def inspect(request: Request):
     roi = (0, 0, w, h)
     reference = None  # No reference upload in v1 multipart; first_pass handles None gracefully
 
-    # --- First pass (deterministic OpenCV) ---
+    # --- First pass (deterministic OpenCV) — timed ---
+    t0 = time.perf_counter()
     first_pass = run_first_pass(frame, reference, [roi], profile_name=profile_name)
+    first_pass_ms = (time.perf_counter() - t0) * 1000
 
     agent_call_dict = None
     second_pass = None
@@ -241,20 +285,28 @@ async def inspect(request: Request):
 
     # --- Agent + second pass (only if UNCERTAIN) ---
     if first_pass.status == "UNCERTAIN":
-        fixture = _fixture_for_first_pass(first_pass)
-        # Real integration point: flows through the same whitelist + fallback logic
-        # that the live Gemini path uses (select_tool).
-        tool_call = select_tool(first_pass, mock_fixture=fixture)
+        t_agent = time.perf_counter()
+        gemini_key = os.environ.get("GEMINI_API_KEY")
+        if gemini_key:
+            # Real Gemini integration — gated behind env var so local dev without a key keeps mock behavior.
+            tool_call = select_tool(first_pass, api_key=gemini_key)
+        else:
+            fixture = _fixture_for_first_pass(first_pass)
+            # Mock path: flows through the same whitelist + fallback logic that the live Gemini path uses.
+            tool_call = select_tool(first_pass, mock_fixture=fixture)
+        agent_ms = (time.perf_counter() - t_agent) * 1000
         agent_call_dict = {"tool": tool_call.tool, "reason_code": tool_call.reason_code}
 
+        t_sp = time.perf_counter()
         try:
             tool_result = _run_tool(tool_call, frame, reference, roi)
         except Exception as e:
             # Tool failure should not crash the whole request — degrade to
             # a REVIEW decision (policy's fallback when second_pass_region is None)
             # but preserve the agent_call for observability.
-            print(f"[inspect] tool {tool_call.tool} failed: {e}")
+            logger.warning(f"[inspect] tool {tool_call.tool} failed: {e}")
             tool_result = None
+        second_pass_ms = (time.perf_counter() - t_sp) * 1000
 
         # Second-pass regions for the API response (exact shape from types.ts)
         if tool_result is not None:
@@ -276,6 +328,8 @@ async def inspect(request: Request):
         final = decide(first_pass, second_region, profile_name=profile_name)
     else:
         # Confident path — no agent, no second pass
+        agent_ms = None
+        second_pass_ms = None
         final = decide(first_pass, None, profile_name=profile_name)
 
     # --- Build result in exact shape from apps/web/src/lib/types.ts ---
@@ -308,8 +362,45 @@ async def inspect(request: Request):
     if second_pass is not None:
         result["second_pass"] = second_pass
 
+    # --- Timing instrumentation for Experiment D (COOL baseline comparison) ---
+    total_ms = (time.perf_counter() - t_total_start) * 1000
+    measurements = {
+        "decode_ms": round(decode_ms, 2) if decode_ms is not None else None,
+        "first_pass_ms": round(first_pass_ms, 2) if first_pass_ms is not None else None,
+        "agent_ms": round(agent_ms, 2) if agent_ms is not None else None,
+        "second_pass_ms": round(second_pass_ms, 2) if second_pass_ms is not None else None,
+        "total_ms": round(total_ms, 2),
+    }
+    result["measurements"] = measurements
+    # Structured log line (not print) — consumed by CloudWatch to compare COOL vs baseline runs
+    try:
+        logger.info(
+            json.dumps(
+                {
+                    "event": "inspect",
+                    "profile": profile_name,
+                    "status": first_pass.status,
+                    "decision": final.decision,
+                    "agent_tool": agent_call_dict["tool"] if agent_call_dict else None,
+                    "measurements": measurements,
+                }
+            )
+        )
+    except Exception:
+        # Logging must never break the request
+        pass
+
     job_id = uuid.uuid4().hex[:8]
-    JOBS[job_id] = result
+    # Use JobStore abstraction — InMemory wraps JOBS dict, Dynamo writes to table. Never crash on store errors.
+    try:
+        store.save(job_id, result)
+    except Exception as e:
+        # Storage layer already logs, but ensure the request still succeeds (store is best-effort).
+        import logging
+
+        logging.getLogger(__name__).error(f"[inspect] store.save failed job_id={job_id}: {e}")
+        # As a last resort, ensure the in-memory dict still has it so the immediate GET can succeed
+        JOBS[job_id] = result
 
     return JSONResponse({"job_id": job_id})
 
@@ -320,7 +411,16 @@ async def get_job(job_id: str):
     Returns the stored InspectionResult for the given job_id.
     The JSON shape matches apps/web/src/lib/types.ts exactly — no wrapper.
     """
-    result = JOBS.get(job_id)
+    try:
+        result = store.get(job_id)
+    except Exception as e:
+        import logging
+
+        logging.getLogger(__name__).error(f"[get_job] store.get failed job_id={job_id}: {e}")
+        result = None
+    # Fallback to in-memory dict if store missed (e.g., Dynamo temporarily unavailable but JOBS has it)
+    if result is None:
+        result = JOBS.get(job_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return JSONResponse(result)

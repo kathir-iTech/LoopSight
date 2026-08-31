@@ -3,4 +3,9 @@ numpy>=2.0
 fastapi>=0.110.0
 uvicorn[standard]>=0.30.0
 python-multipart>=0.0.9
-# google-genai  # uncomment once wiring the real agent call; not installed/tested in this environment
+google-genai>=1.0.0
+boto3>=1.35.0
+mangum>=0.19.0
+# google-genai wired via GEMINI_API_KEY env var (see services/inference/main.py); mock path remains default
+# boto3 for optional DynamoDB JobStore (storage.py) — only used when AWS credentials are resolvable
+# mangum wraps FastAPI for AWS Lambda (handler = Mangum(app)); no effect on local uvicorn run

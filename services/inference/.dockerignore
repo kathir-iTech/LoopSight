@@ -1,0 +1,17 @@
+# Inference service — dockerignore
+# Keep the Lambda/ECR image small; exclude anything not needed at runtime.
+tests/
+__pycache__/
+*/__pycache__/
+*.pyc
+*.pyo
+data/
+*.pkl
+*.h5
+*.onnx
+.git/
+.gitignore
+.env
+.venv/
+venv/
+README_DEPLOY*.md

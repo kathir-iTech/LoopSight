@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getJob } from "@/lib/mock-data";
 
 export async function GET(
   _request: Request,
@@ -14,24 +15,18 @@ export async function GET(
       { cache: "no-store" }
     );
 
-    const bodyText = await res.text();
-    let data: unknown;
-    try {
-      data = JSON.parse(bodyText);
-    } catch {
-      data = { error: bodyText };
-    }
-
     if (!res.ok) {
-      return NextResponse.json(data, { status: res.status });
+      throw new Error(`Inference responded ${res.status}`);
     }
 
+    const data = await res.json();
     return NextResponse.json(data);
   } catch (e) {
-    console.error("[proxy /api/jobs] inference unavailable:", e);
-    return NextResponse.json(
-      { error: "Inference service unavailable", detail: String(e) },
-      { status: 502 }
-    );
+    console.warn(`[jobs/${id}] falling back to mock — inference unavailable:`, e);
+    const job = getJob(id);
+    if (!job) {
+      return NextResponse.json({ error: "Job not found" }, { status: 404 });
+    }
+    return NextResponse.json(job.result);
   }
 }

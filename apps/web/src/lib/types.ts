@@ -32,6 +32,14 @@ export interface FinalDecision {
   human_approval_required: boolean;
 }
 
+export interface Measurements {
+  decode_ms: number;
+  first_pass_ms: number;
+  agent_ms: number | null;
+  second_pass_ms: number | null;
+  total_ms: number;
+}
+
 export interface InspectionResult {
   status: "CONFIDENT_PASS" | "CONFIDENT_FAIL" | "UNCERTAIN";
   regions: Region[];
@@ -39,6 +47,7 @@ export interface InspectionResult {
   agent_call?: AgentCall;
   second_pass?: SecondPass;
   final_decision: FinalDecision;
+  measurements?: Measurements;
 }
 
 export interface Job {

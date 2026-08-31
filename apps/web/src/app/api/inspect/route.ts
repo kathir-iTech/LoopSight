@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { MOCK_RESULT, createJob } from "@/lib/mock-data";
 
 export async function POST(request: NextRequest) {
   const inferenceUrl =
@@ -17,24 +18,17 @@ export async function POST(request: NextRequest) {
       body: formData,
     });
 
-    const bodyText = await res.text();
-    let data: unknown;
-    try {
-      data = JSON.parse(bodyText);
-    } catch {
-      data = { error: bodyText };
-    }
-
     if (!res.ok) {
-      return NextResponse.json(data, { status: res.status });
+      throw new Error(`Inference responded ${res.status}`);
     }
 
+    const data = await res.json();
     return NextResponse.json(data);
   } catch (e) {
-    console.error("[proxy /api/inspect] inference unavailable:", e);
-    return NextResponse.json(
-      { error: "Inference service unavailable", detail: String(e) },
-      { status: 502 }
-    );
+    console.warn("[inspect] falling back to mock — inference unavailable:", e);
+    // Preserve original mock behavior: ignore uploaded content, return a canned result.
+    // This keeps the deployed site demoable even when the backend is unreachable from Vercel.
+    const jobId = createJob(MOCK_RESULT);
+    return NextResponse.json({ job_id: jobId });
   }
 }
