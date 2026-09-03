@@ -4,7 +4,7 @@ import { useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Upload, Camera, X } from "lucide-react";
+import { Upload, Camera, X, FlaskConical } from "lucide-react";
 
 export default function HomePage() {
   const router = useRouter();
@@ -103,6 +103,27 @@ export default function HomePage() {
     setError(null);
   }, []);
 
+  const submitDemoCase = useCallback(
+    (demoCase: string) => {
+      setUploading(true);
+      setError(null);
+      fetch("/api/inspect", {
+        method: "POST",
+        body: new URLSearchParams({ demo_case: demoCase }),
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error("Demo inspect failed");
+          return res.json();
+        })
+        .then(({ job_id }) => router.push(`/job/${job_id}`))
+        .catch(() => {
+          setError("Demo inspect failed. Please try again.");
+          setUploading(false);
+        });
+    },
+    [router]
+  );
+
   return (
     <div className="min-h-screen bg-neutral-50 flex flex-col items-center justify-center p-4">
       <Card className="w-full max-w-lg">
@@ -182,6 +203,16 @@ export default function HomePage() {
             className="w-full"
           >
             {uploading ? "Inspecting..." : "Inspect"}
+          </Button>
+
+          <Button
+            onClick={() => submitDemoCase("uncertain")}
+            disabled={uploading}
+            variant="outline"
+            className="w-full"
+          >
+            <FlaskConical className="mr-2 h-4 w-4" />
+            Try the ambiguous case (force agent loop)
           </Button>
         </CardContent>
       </Card>

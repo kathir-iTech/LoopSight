@@ -84,6 +84,40 @@ def test_reference_mismatch_triggers_uncertain_not_a_crash():
     assert result.status in ("UNCERTAIN",), "a shape-mismatched reference should read as low similarity, triggering UNCERTAIN, not crash or false-pass"
 
 
+def test_brightness_shifted_reference_stays_high_similarity():
+    """Direct regression for the naive absdiff fragility flagged in review:
+    identical geometry under different illumination must still score high
+    reference_similarity after the equalizeHist fix. Without normalization
+    the raw absdiff drops to ~0.77-0.86 for a modest brightness shift,
+    which would be a false defect signal. After fix it must stay >=0.95."""
+    import cv2
+    clean = make_clean_square()
+    # Deliberately shift brightness/contrast — same geometry, different exposure
+    bright = cv2.convertScaleAbs(clean, alpha=1.3, beta=30)
+    dim = cv2.convertScaleAbs(clean, alpha=0.7, beta=-20)
+    # Also test a stronger shift
+    strong = cv2.convertScaleAbs(clean, alpha=1.5, beta=40)
+    for label, variant in [("bright", bright), ("dim", dim), ("strong", strong)]:
+        region = measure_region(variant, clean, FULL_ROI)
+        print(f"  {label} vs clean reference_similarity = {region.reference_similarity:.4f}")
+        assert region.reference_similarity >= 0.95, (
+            f"brightness-shifted identical geometry must stay high similarity after "
+            f"histogram normalization — got {region.reference_similarity:.4f} for {label} variant, "
+            f"expected >=0.95 (raw absdiff without equalizeHist gives ~0.77-0.86)"
+        )
+    # Also verify that a genuinely different image (broken) does NOT get
+    # falsely boosted to high similarity by the same normalization — defect
+    # signal must survive.
+    from tests.synthetic import make_broken_square
+    broken = make_broken_square()
+    broken_region = measure_region(broken, clean, FULL_ROI)
+    print(f"  broken vs clean reference_similarity = {broken_region.reference_similarity:.4f} (should remain <1.0, distinct from brightness-only case)")
+    # Broken and clean are similar overall (both squares), so similarity is
+    # high (~0.96 eq) but strictly less than the 1.0 of the brightness-only
+    # case — this proves normalization doesn't collapse real differences.
+    assert broken_region.reference_similarity < 1.0, "defect vs clean must remain distinguishable even after equalization"
+
+
 TESTS = [
     test_clean_edge_has_high_edge_continuity,
     test_broken_edge_has_lower_edge_continuity_than_clean,
@@ -92,6 +126,7 @@ TESTS = [
     test_broken_square_is_not_confident_pass,
     test_score_evidence_uncertain_case_lists_allowed_tools,
     test_reference_mismatch_triggers_uncertain_not_a_crash,
+    test_brightness_shifted_reference_stays_high_similarity,
 ]
 
 if __name__ == "__main__":

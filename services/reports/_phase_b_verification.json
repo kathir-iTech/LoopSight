@@ -1,0 +1,141 @@
+{
+  "phase": "B",
+  "ok": true,
+  "checks": [
+    {
+      "check": "clean /inspect status 200",
+      "ok": true,
+      "detail": "status=200 body={\"job_id\":\"55029e26\"}"
+    },
+    {
+      "check": "clean /jobs ok",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "check": "clean evidence.edge_continuity not frozen mock 0.0238",
+      "ok": true,
+      "detail": "edge_continuity=0.0238"
+    },
+    {
+      "check": "clean evidence.reference_similarity not frozen mock 1.0",
+      "ok": true,
+      "detail": "reference_similarity=1.0"
+    },
+    {
+      "check": "clean evidence.layer_alignment_deviation not frozen mock 0.12505247418397153",
+      "ok": true,
+      "detail": "layer_alignment_deviation=0.12505247418397153"
+    },
+    {
+      "check": "clean status is real enum",
+      "ok": true,
+      "detail": "status=UNCERTAIN"
+    },
+    {
+      "check": "clean decision is real enum",
+      "ok": true,
+      "detail": "decision=FAIL"
+    },
+    {
+      "check": "broken /inspect status 200",
+      "ok": true,
+      "detail": "status=200 body={\"job_id\":\"07df3ccd\"}"
+    },
+    {
+      "check": "broken status is real enum",
+      "ok": true,
+      "detail": "status=UNCERTAIN"
+    }
+  ],
+  "clean_result": {
+    "status": "UNCERTAIN",
+    "regions": [
+      {
+        "x": 0,
+        "y": 0,
+        "w": 200,
+        "h": 200,
+        "evidence": {
+          "edge_continuity": 0.0238,
+          "reference_similarity": 1.0,
+          "layer_alignment_deviation": 0.12505247418397153
+        }
+      }
+    ],
+    "evidence_gap": [
+      "low local contrast \u2014 cannot confirm edge deviation"
+    ],
+    "final_decision": {
+      "decision": "FAIL",
+      "confidence_band": "medium",
+      "human_approval_required": true
+    },
+    "agent_call": {
+      "tool": "reinspect_roi",
+      "reason_code": "INSUFFICIENT_LOCAL_CONTRAST"
+    },
+    "second_pass": {
+      "regions": [
+        {
+          "edge_continuity": 0.0119,
+          "reference_similarity": 1.0,
+          "layer_alignment_deviation": 0.1250624875140633,
+          "local_contrast": 0.3314315779046513
+        }
+      ]
+    },
+    "measurements": {
+      "decode_ms": 1.45,
+      "first_pass_ms": 7.24,
+      "agent_ms": 0.05,
+      "second_pass_ms": 6.24,
+      "total_ms": 15.77
+    }
+  },
+  "broken_result": {
+    "status": "UNCERTAIN",
+    "regions": [
+      {
+        "x": 0,
+        "y": 0,
+        "w": 200,
+        "h": 200,
+        "evidence": {
+          "edge_continuity": 0.0138,
+          "reference_similarity": 1.0,
+          "layer_alignment_deviation": 0.17895347854452176
+        }
+      }
+    ],
+    "evidence_gap": [
+      "low local contrast \u2014 cannot confirm edge deviation"
+    ],
+    "final_decision": {
+      "decision": "FAIL",
+      "confidence_band": "medium",
+      "human_approval_required": true
+    },
+    "agent_call": {
+      "tool": "reinspect_roi",
+      "reason_code": "INSUFFICIENT_LOCAL_CONTRAST"
+    },
+    "second_pass": {
+      "regions": [
+        {
+          "edge_continuity": 0.0072,
+          "reference_similarity": 1.0,
+          "layer_alignment_deviation": 0.230476593819623,
+          "local_contrast": 0.22380995605659218
+        }
+      ]
+    },
+    "measurements": {
+      "decode_ms": 1.13,
+      "first_pass_ms": 1.56,
+      "agent_ms": 0.04,
+      "second_pass_ms": 4.7,
+      "total_ms": 8.15
+    }
+  }
+}

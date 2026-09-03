@@ -25,7 +25,39 @@ import os
 import sys
 import time
 import uuid
+from pathlib import Path
 from typing import Dict, Optional
+
+# Load .env if present so GEMINI_API_KEY pasted by the user is picked up
+# without requiring manual `export` (works both locally and in Docker).
+def _load_dotenv():
+    candidates = [
+        Path(__file__).resolve().parents[3] / ".env",  # repo root when running from services/inference/
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parent.parent.parent / ".env",
+    ]
+    seen = set()
+    for cand in candidates:
+        if cand in seen:
+            continue
+        seen.add(cand)
+        if cand.is_file():
+            try:
+                with cand.open("r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#") or "=" not in line:
+                            continue
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip('"').strip("'")
+                        if k and k not in os.environ:
+                            os.environ[k] = v
+                break
+            except Exception:
+                continue
+
+_load_dotenv()
 
 # Ensure local imports work whether uvicorn is launched from
 # services/inference/ or from the repo root.
@@ -45,6 +77,7 @@ from cv.tools import TOOL_REGISTRY  # type: ignore
 from cv.policy import decide  # type: ignore
 from agent.tool_selector import select_tool  # type: ignore
 from storage import create_job_store, InMemoryJobStore  # type: ignore
+import demo_golden  # type: ignore
 
 app = FastAPI(title="LoopSight Inference", version="0.1.0")
 
@@ -70,6 +103,11 @@ app.add_middleware(
 # In-memory job store (default) — wrapped by the JobStore abstraction.
 # This dict is the backing store for InMemoryJobStore and the default when no AWS credentials are present.
 JOBS: Dict[str, dict] = {}
+
+# Upload hardening: reject files above this size up-front (10 MiB) so a huge
+# or malicious multipart body can never be buffered/decoded into memory or
+# forwarded to the CV pipeline. Returns a structured 413, never a 500.
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 # JobStore abstraction — picks InMemory vs Dynamo at startup based on env/credentials.
 # See storage.py: InMemoryJobStore wraps JOBS; DynamoJobStore uses boto3 only if credentials resolvable.
@@ -226,6 +264,20 @@ async def inspect(request: Request):
 
     form = await request.form()
 
+    # --- Demo-mode short-circuit (DEMO_MODE=golden) ---
+    # Serve a pre-computed golden result INSTEAD of running the live pipeline,
+    # so a demo in front of judges never depends on a live API (Gemini or the
+    # CV runtime) working. See spec Section 10: this is a required fallback,
+    # not optional polish. The result is stored so GET /jobs/{id} still works.
+    golden = demo_golden.resolve_golden_from_request(form)
+    if golden is not None:
+        golden_job_id = uuid.uuid4().hex[:8]
+        try:
+            store.save(golden_job_id, golden)
+        except Exception:
+            JOBS[golden_job_id] = golden
+        return JSONResponse({"job_id": golden_job_id})
+
     # Accept both 'image' (frontend) and 'file' (generic clients/curl) field names
     upload = form.get("image")
     if upload is None:
@@ -258,6 +310,12 @@ async def inspect(request: Request):
 
     if not data:
         raise HTTPException(status_code=400, detail="image file is empty")
+
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"image file too large: {len(data)} bytes exceeds limit of {MAX_UPLOAD_BYTES} bytes",
+        )
 
     # Decode image via OpenCV — timed for Experiment D
     t0 = time.perf_counter()

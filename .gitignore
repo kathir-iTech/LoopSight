@@ -1,0 +1,14 @@
+# Entries to never commit
+.env*
+.env.local
+*.key
+*.pem
+*.keyfile
+
+# Python runtime/build artifacts
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/

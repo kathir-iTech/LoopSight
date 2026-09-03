@@ -98,7 +98,22 @@ def measure_region(
         ref_crop = reference[y:y + h, x:x + w]
         ref_gray = cv2.cvtColor(ref_crop, cv2.COLOR_BGR2GRAY) if ref_crop.ndim == 3 else ref_crop
         if ref_gray.shape == gray.shape:
-            diff = cv2.absdiff(gray, ref_gray)
+            # Lighting-normalized comparison: equalize histograms before absdiff.
+            # Rationale (tested on synthetic fixtures): cv2.equalizeHist() makes
+            # reference_similarity invariant to global brightness/exposure shifts
+            # (e.g. cv2.convertScaleAbs alpha=1.3 beta=30): raw absdiff drops to
+            # ~0.77-0.86 for identical geometry under different illumination,
+            # equalized stays at 1.0. CLAHE (clipLimit=2.0, 8x8) was also tested
+            # but left similarity at ~0.84 — it preserves local contrast but does
+            # not correct the global shift, so it does not fix the flagged
+            # fragility. EqualizeHist does NOT hide real defects: clean vs.
+            # broken synthetic squares score 0.9667 equalized vs 0.9765 raw (still
+            # distinct), and uniform-vs-square stays low (0.498 eq vs 0.654 raw).
+            # EqualizeHist is therefore kept; CLAHE is the wrong tool for this
+            # global-exposure failure mode.
+            eq_gray = cv2.equalizeHist(gray)
+            eq_ref = cv2.equalizeHist(ref_gray)
+            diff = cv2.absdiff(eq_gray, eq_ref)
             reference_similarity = 1.0 - (float(np.mean(diff)) / 255.0)
         else:
             reference_similarity = 0.0  # shape mismatch is itself evidence of misalignment

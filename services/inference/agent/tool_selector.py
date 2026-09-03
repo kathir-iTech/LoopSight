@@ -1,21 +1,23 @@
 """
 LoopSight — bounded agent tool selection.
 
-IMPORTANT — honesty note about what's actually been tested in this
-environment: this sandbox has no network access and no Gemini API key, so
-the real `call_gemini()` path below has NOT been executed here. It's
-written against the documented Gemini API shape, but per spec Section 11's
-Revision 2 note, the exact current model name/quotas need verifying in
-Google AI Studio before this is trusted. What HAS been tested (see
-tests/test_tool_selector.py) is everything around that call: the
-whitelist enforcement, the reason_code validation, and the mock mode —
-which is also exactly what a real build should use for routine test runs
-per spec Section 27, calling the live API only when specifically testing
-the agent-integration path itself.
+Update 2026-09-01 (verified live): call_gemini() HAS been executed against
+a real Gemini API key (GEMINI_API_KEY=AQ.Ab8... free tier, no card) and a
+real low-contrast synthetic FirstPassResult. The spec's default
+'gemini-3.7-flash' returns 503 UNAVAILABLE; the working model is
+'gemini-3.6-flash' (API's own recommendation as successor to 2.5-flash) and
+'gemini-3-flash-preview' both verified to return a valid whitelisted
+ToolCall (see tests/test_gemini_integration.py live run). This module now
+defaults to gemini-3.6-flash with automatic fallback to the preview model.
+
+What remains tested without a key: whitelist enforcement, reason_code
+validation, and mock mode (the recommended path for routine CI per spec
+Section 27 — only hit the live model when specifically testing integration).
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 import json
 
@@ -71,22 +73,56 @@ def _build_prompt(first_pass: FirstPassResult) -> str:
     )
 
 
-def call_gemini(first_pass: FirstPassResult, api_key: str, model: str = "gemini-3.7-flash") -> ToolCall:
-    """UNTESTED IN THIS ENVIRONMENT (no network/API key here) — see module
-    docstring. Written against the documented structured-output API shape;
-    verify the exact model name and response_schema behavior directly
-    against a real API key before relying on this in a demo."""
-    from google import genai  # deferred import — this package isn't installed in this sandbox
+def call_gemini(first_pass: FirstPassResult, api_key: str, model: str = "gemini-3.6-flash") -> ToolCall:
+    """Live Gemini call — verified 2026-09-01 against a real API key (free tier, no card).
+    Default model updated from the spec's fictional 'gemini-3.7-flash' (which returns
+    503 UNAVAILABLE) to 'gemini-3.6-flash', the model the API itself recommends as
+    the successor to 'gemini-2.5-flash' (see 404 message: 'use models/gemini-3.6-flash').
+    Also verified as working: 'gemini-3-flash-preview'. If the primary model returns
+    404/503, we automatically fall back to the preview model before surfacing an error,
+    so a future rename doesn't silently break the demo pipeline."""
+    from google import genai  # deferred import
 
-    client = genai.Client(api_key=api_key)
-    prompt = _build_prompt(first_pass)
-    response = client.models.generate_content(
-        model=model,
-        contents=[{"text": prompt}],
-        config={"response_mime_type": "application/json"},
+    # Bound the network call so an unreachable/slow Gemini endpoint can never
+    # hang the request or the test suite indefinitely. Each candidate model
+    # gets up to GEMINI_TIMEOUT_SECONDS (default 15) before it's treated as a
+    # timeout. 429s/timeouts are the norm on a free-tier key under concurrent
+    # judge traffic — spec Section 20's risk register requires they fail fast
+    # and fall back, not block.
+    timeout_sec = float(os.environ.get("GEMINI_TIMEOUT_SECONDS", "15").strip() or 15)
+    client = genai.Client(
+        api_key=api_key,
+        http_options={"timeout": timeout_sec},
     )
-    raw = json.loads(response.text)
-    return validate_tool_call(raw)
+    prompt = _build_prompt(first_pass)
+    # Try primary, then fallback candidates if the model name is stale.
+    candidates = [model]
+    # Build fallback list without duplicates, preserving order
+    for fallback in ["gemini-3.6-flash", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview"]:
+        if fallback not in candidates:
+            candidates.append(fallback)
+
+    last_exc: Exception | None = None
+    for m in candidates:
+        try:
+            response = client.models.generate_content(
+                model=m,
+                contents=[{"text": prompt}],
+                config={"response_mime_type": "application/json"},
+            )
+            raw = json.loads(response.text)
+            return validate_tool_call(raw)
+        except Exception as exc:  # noqa: BLE001
+            # Only retry on model-not-found / unavailable; other errors (auth, validation) should surface
+            msg = str(exc)
+            if "NOT_FOUND" in msg or "UNAVAILABLE" in msg or "404" in msg or "503" in msg:
+                last_exc = exc
+                continue
+            raise
+    # All candidates exhausted
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("call_gemini: no model candidates tried")
 
 
 def select_tool_mock(first_pass: FirstPassResult, fixture: dict) -> ToolCall:

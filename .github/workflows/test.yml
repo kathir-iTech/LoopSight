@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  inference-tests:
+    name: Inference tests (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/inference
+    env:
+      # Definitively turn off the LIVE Gemini integration test in CI. Its
+      # _load_env_key() treats 'disabled' as "no key, do not .env-search", so
+      # it skip()s in <1s even if a key or stale .env sneaks in. The real,
+      # network-bound Gemini path is intentionally exercised only locally.
+      GEMINI_API_KEY: disabled
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install inference dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ../../requirements.txt
+          pip install pytest
+
+      - name: Run the inference test suite
+        # The suite self-imports via sys.path and never needs a real Gemini key
+        # or real photos; it runs the full harness (phases B/C/D/E) on synthetic
+        # fixtures. A real-dataset swap is a one-command change, not a rewrite.
+        run: python -X utf8 -m pytest tests/ -q
+
+  web-build:
+    name: Web build (Next.js)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build the Next.js app
+        run: npm run build
