@@ -78,6 +78,13 @@ def _is_placeholder_value(line: str) -> bool:
 
 def scan_file(path: Path) -> list[tuple[str, int, str]]:
     """Return list of (pattern_name, line_number, line_snippet)."""
+    # Ignore package-lock.json integrity hashes (base64 hashes that match the 40-char pattern)
+    if path.name == "package-lock.json" or path.name == "package.json":
+        # Only scan for real API key patterns in these files, not generic base64
+        real_patterns = [p for p in PATTERNS if p[0] not in ("aws_secret_key",)]
+        patterns_to_use = real_patterns
+    else:
+        patterns_to_use = PATTERNS
     findings: list[tuple[str, int, str]] = []
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -87,7 +94,10 @@ def scan_file(path: Path) -> list[tuple[str, int, str]]:
     for lineno, line in enumerate(lines, 1):
         if _is_placeholder_value(line):
             continue
-        for name, rx in PATTERNS:
+        # Skip npm integrity lines (sha512 base64) — known false positive
+        if '"integrity"' in line or '"resolved"' in line:
+            continue
+        for name, rx in patterns_to_use:
             if rx.search(line):
                 findings.append((name, lineno, line.strip()[:120]))
     return findings
