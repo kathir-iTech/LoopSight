@@ -19,9 +19,11 @@ The result JSON shape matches apps/web/src/lib/types.ts exactly.
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import os
+import platform
 import sys
 import time
 import uuid
@@ -242,6 +244,22 @@ async def health_alt():
     return {"status": "ok"}
 
 
+# Phase 6: /version endpoint for technical report and judge verification
+BUILD_TIMESTAMP = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+@app.get("/version")
+async def version():
+    """Returns stack version evidence — used in technical report and by judges to verify OpenCV 5."""
+    gemini_model = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
+    return {
+        "opencv_version": cv2.__version__,
+        "python_version": platform.python_version(),
+        "profile_names": sorted(PROFILES.keys()),
+        "gemini_model": gemini_model,
+        "build_timestamp": BUILD_TIMESTAMP,
+    }
+
+
 @app.post("/inspect")
 async def inspect(request: Request):
     """
@@ -329,7 +347,25 @@ async def inspect(request: Request):
     # Single ROI covering the full image — simple, matches synthetic test harness.
     # Future: part-detection to propose tighter ROIs; not needed for v1 wiring.
     roi = (0, 0, w, h)
-    reference = None  # No reference upload in v1 multipart; first_pass handles None gracefully
+    # Phase 3: optional reference image for comparison (known-good print)
+    reference = None
+    ref_upload = form.get("reference_image") or form.get("reference") or form.get("referenceImage")
+    if ref_upload is not None and hasattr(ref_upload, "read"):
+        try:
+            ref_data = await ref_upload.read()  # type: ignore
+            if ref_data and len(ref_data) <= MAX_UPLOAD_BYTES:
+                try:
+                    reference = _decode_image(ref_data)
+                    # If decoded reference shape mismatches frame, still pass it — measure_region handles shape mismatch
+                    logger.info(f"[inspect] reference image decoded: shape={reference.shape}")
+                except ValueError as e:
+                    logger.warning(f"[inspect] reference image decode failed, ignoring: {e}")
+                    reference = None
+            elif ref_data and len(ref_data) > MAX_UPLOAD_BYTES:
+                logger.warning(f"[inspect] reference image too large ({len(ref_data)} bytes), ignoring")
+        except Exception as e:
+            logger.warning(f"[inspect] failed to read reference_image: {e}")
+            reference = None
 
     # --- First pass (deterministic OpenCV) — timed ---
     t0 = time.perf_counter()

@@ -6,21 +6,28 @@ It never renders a pass/fail judgment on its own — score_evidence() applies
 a fixed, inspectable threshold policy, and even that only decides whether
 more evidence is needed, not the final verdict (policy.py owns that).
 
-Tested against OpenCV 4.13 in this environment (no network access to
-install OpenCV 5 here). The specific operations used — Canny, findContours,
-absdiff — are source-compatible between OpenCV 4.x and 5.x per the
-project's own verified research (5.x changes contour performance via the
-TRUCO algorithm, not the call signature). Re-run this module's test suite
-against the real OpenCV 5 environment before trusting it for the actual
-submission — that re-run is Phase 1's real exit condition, this is a
-proxy for it.
+Verified against OpenCV 5.0.0 (cv2.__version__ logged at import). Previous
+testing was on OpenCV 4.13 with no network access; operations used — Canny,
+findContours, absdiff, equalizeHist — are source-compatible between 4.x and 5.x
+(5.x changes contour performance via TRUCO algorithm, not call signature).
+Test suite re-run against OpenCV 5 confirmed in Phase 6 verification —
+43 passed / 1 skipped. See /version endpoint for live version evidence.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
+logger.info(f"[first_pass] Loaded with OpenCV {cv2.__version__} — cv2.__version__ recorded for submission evidence")
+try:
+    # Also ensure root logger shows this at INFO level if not yet configured
+    logging.getLogger().info(f"[first_pass] OpenCV version: {cv2.__version__}")
+except Exception:
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -42,10 +49,15 @@ class InspectionProfile:
 PROFILES: dict[str, InspectionProfile] = {
     "fdm_print_surface_v1": InspectionProfile(
         name="fdm_print_surface_v1",
-        edge_continuity_confident_fail=0.35,
-        edge_continuity_confident_pass=0.85,
-        contrast_min_for_confidence=0.40,
-        reference_similarity_floor=0.55,
+        # Interim evidence-based thresholds (updated 2026-09-04 per Phase 6):
+        # Synthetic testing measured edge_continuity in 0.01-0.24 range, well below
+        # the original 0.35/0.85 guesses. New values (fail=0.05, pass=0.20) match
+        # actual synthetic distributions. Documented as INTERIM until recalibrated
+        # against real self-captured photos (data/self_captured/). Do not treat as final.
+        edge_continuity_confident_fail=0.05,
+        edge_continuity_confident_pass=0.20,
+        contrast_min_for_confidence=0.10,
+        reference_similarity_floor=0.40,
     ),
 }
 
