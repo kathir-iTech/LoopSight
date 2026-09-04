@@ -106,6 +106,13 @@ app.add_middleware(
 # This dict is the backing store for InMemoryJobStore and the default when no AWS credentials are present.
 JOBS: Dict[str, dict] = {}
 
+# Frame cache for genuine two-lighting second look (Phase 3): stores decoded frame
+# + timestamp/seq/lighting per job so a follow-up POST with original_job_id + image2
+# can call track_across_frames([frame1, frame2]) for real — fixes the audit's
+# "decorative" finding where track_across_frames was stubbed to reinspect_roi.
+FRAME_CACHE: Dict[str, dict] = {}
+FRAME_SEQ_COUNTER = 0
+
 # Upload hardening: reject files above this size up-front (10 MiB) so a huge
 # or malicious multipart body can never be buffered/decoded into memory or
 # forwarded to the CV pipeline. Returns a structured 413, never a 500.
@@ -409,6 +416,59 @@ async def inspect(request: Request):
             logger.warning(f"[inspect] failed to read reference_image: {e}")
             reference = None
 
+    # Phase 3 — second look with different lighting: accept optional second image + lighting metadata
+    # Frontend after UNCERTAIN shows "Take second photo with flash/backlight" prompt that POSTs
+    # original_job_id + image2. This also supports single-request two-image mode (image + image2).
+    second_frame: Optional[np.ndarray] = None
+    second_frame_lighting: str = "backlight"
+    second_frame_timestamp: Optional[str] = None
+    # Check for second image in same request (image2 / second_image / lighting_image2)
+    second_upload = form.get("image2") or form.get("second_image") or form.get("lighting_image2") or form.get("secondImage")
+    lighting_field = form.get("lighting") or form.get("lighting1") or form.get("image_lighting")
+    second_lighting_field = form.get("lighting2") or form.get("image2_lighting") or form.get("second_lighting") or form.get("secondImageLighting")
+    first_lighting = str(lighting_field).strip() if lighting_field and not hasattr(lighting_field, "read") else "ambient"
+    if hasattr(first_lighting, "read"):
+        first_lighting = "ambient"
+    if not first_lighting:
+        first_lighting = "ambient"
+    # Requested second lighting (for follow-up path where second image comes as primary 'image')
+    requested_second_lighting = str(second_lighting_field).strip() if second_lighting_field and not hasattr(second_lighting_field, "read") else "backlight"
+    if not requested_second_lighting or hasattr(requested_second_lighting, "read"):
+        requested_second_lighting = "backlight"
+    if second_upload is not None and hasattr(second_upload, "read"):
+        try:
+            sec_data = await second_upload.read()  # type: ignore
+            if sec_data and len(sec_data) <= MAX_UPLOAD_BYTES and len(sec_data) > 0:
+                try:
+                    second_frame = _decode_image(sec_data)
+                    second_frame_lighting = requested_second_lighting
+                    second_frame_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    logger.info(f"[inspect] second frame decoded: shape={second_frame.shape} lighting={second_frame_lighting}")
+                except ValueError as e:
+                    logger.warning(f"[inspect] second image decode failed, ignoring: {e}")
+                    second_frame = None
+        except Exception as e:
+            logger.warning(f"[inspect] failed to read second image: {e}")
+            second_frame = None
+    else:
+        second_frame_lighting = requested_second_lighting
+    # Also handle follow-up request: original_job_id + image (job page second photo)
+    original_job_id = form.get("original_job_id") or form.get("previous_job_id") or form.get("job_id")
+    if original_job_id and hasattr(original_job_id, "read"):
+        try:
+            original_job_id = (await original_job_id.read()).decode("utf-8")  # type: ignore
+        except Exception:
+            original_job_id = None
+    if original_job_id:
+        original_job_id = str(original_job_id).strip()
+    cached_original: Optional[dict] = None
+
+    first_frame_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    global FRAME_SEQ_COUNTER
+    FRAME_SEQ_COUNTER += 1
+    first_seq = FRAME_SEQ_COUNTER
+    second_seq = FRAME_SEQ_COUNTER + 1 if second_frame is not None else None
+
     # --- First pass (deterministic OpenCV) — timed ---
     t0 = time.perf_counter()
     first_pass = run_first_pass(frame, reference, [roi], profile_name=profile_name)
@@ -420,26 +480,90 @@ async def inspect(request: Request):
     tool_call = None
 
     # --- Agent + second pass (only if UNCERTAIN) ---
+    frame_info_for_result = None  # will be populated if two frames used
     if first_pass.status == "UNCERTAIN":
         t_agent = time.perf_counter()
         gemini_key = os.environ.get("GEMINI_API_KEY")
         if gemini_key:
-            # Real Gemini integration — gated behind env var so local dev without a key keeps mock behavior.
             tool_call = select_tool(first_pass, api_key=gemini_key)
         else:
             fixture = _fixture_for_first_pass(first_pass)
-            # Mock path: flows through the same whitelist + fallback logic that the live Gemini path uses.
             tool_call = select_tool(first_pass, mock_fixture=fixture)
         agent_ms = (time.perf_counter() - t_agent) * 1000
         agent_call_dict = {"tool": tool_call.tool, "reason_code": tool_call.reason_code}
 
+        # Real two-lighting path: if second_frame present (same-request image2) or
+        # original_job_id cache hit, use track_across_frames for real
+        real_two_frame = False
+        frames_for_track: Optional[list] = None
+        frame_metas: Optional[list] = None
+        # Case A: same-request two images (image + image2)
+        if second_frame is not None:
+            # If original_job_id also present, prefer cached original as frame1, second_frame as frame2
+            if original_job_id and original_job_id in FRAME_CACHE:
+                cached = FRAME_CACHE[original_job_id]
+                frame1 = cached["frame"]
+                ts1 = cached["timestamp"]
+                seq1 = cached["seq"]
+                light1 = cached.get("lighting", "ambient")
+                frames_for_track = [frame1, second_frame]
+                frame_metas = [
+                    {"seq": seq1, "timestamp": ts1, "lighting": light1},
+                    {"seq": second_seq if second_seq else FRAME_SEQ_COUNTER + 1, "timestamp": second_frame_timestamp or first_frame_timestamp, "lighting": second_frame_lighting},
+                ]
+                real_two_frame = True
+                logger.info(f"[inspect] two-lighting via original_job_id {original_job_id} -> track_across_frames")
+            else:
+                # Both frames from this request: frame + second_frame
+                frames_for_track = [frame, second_frame]
+                frame_metas = [
+                    {"seq": first_seq, "timestamp": first_frame_timestamp, "lighting": first_lighting},
+                    {"seq": second_seq if second_seq else first_seq + 1, "timestamp": second_frame_timestamp or first_frame_timestamp, "lighting": second_frame_lighting},
+                ]
+                real_two_frame = True
+                logger.info(f"[inspect] two-lighting same-request -> track_across_frames")
+        elif original_job_id and original_job_id in FRAME_CACHE and second_frame is None:
+            cached = FRAME_CACHE[original_job_id]
+            frame1 = cached["frame"]
+            ts1 = cached["timestamp"]
+            seq1 = cached["seq"]
+            light1 = cached.get("lighting", "ambient")
+            frames_for_track = [frame1, frame]
+            frame_metas = [
+                {"seq": seq1, "timestamp": ts1, "lighting": light1},
+                {"seq": first_seq, "timestamp": first_frame_timestamp, "lighting": requested_second_lighting},
+            ]
+            real_two_frame = True
+            logger.info(f"[inspect] two-lighting via cached original {original_job_id} + current frame -> track_across_frames")
+
+        # If real two-frame available, force track_across_frames when allowed (water thesis)
+        if real_two_frame and frames_for_track is not None:
+            if "track_across_frames" in first_pass.allowed_tools:
+                # Override agent choice to the lighting tool when we have two lightings — this is the marquee mechanism
+                if tool_call.tool != "track_across_frames":
+                    logger.info(f"[inspect] overriding agent {tool_call.tool} -> track_across_frames due to two lightings available")
+                    tool_call = type(tool_call)(tool="track_across_frames", arguments={}, reason_code="BORDERLINE_TWO_LIGHTINGS_DIFFERENT_LIGHTING_AVAILABLE")
+                    agent_call_dict = {"tool": tool_call.tool, "reason_code": tool_call.reason_code}
+                frame_info_for_result = frame_metas
+                # Increment seq for second frame
+                if second_seq:
+                    FRAME_SEQ_COUNTER = max(FRAME_SEQ_COUNTER, second_seq)
+            else:
+                # Two frames but track not allowed — don't force, just use single-frame fallback
+                real_two_frame = False
+                frames_for_track = None
+                frame_metas = None
+
         t_sp = time.perf_counter()
         try:
-            tool_result = _run_tool(tool_call, frame, reference, roi, profile_name=profile_name)
+            if real_two_frame and frames_for_track is not None:
+                fn = TOOL_REGISTRY["track_across_frames"]
+                tool_result = fn(frames_for_track, roi)
+                if frame_metas:
+                    tool_result.notes += f" | frames {frame_metas[0]['seq']}@{frame_metas[0]['timestamp']} ({frame_metas[0]['lighting']}) -> {frame_metas[1]['seq']}@{frame_metas[1]['timestamp']} ({frame_metas[1]['lighting']})"
+            else:
+                tool_result = _run_tool(tool_call, frame, reference, roi, profile_name=profile_name)
         except Exception as e:
-            # Tool failure should not crash the whole request — degrade to
-            # a REVIEW decision (policy's fallback when second_pass_region is None)
-            # but preserve the agent_call for observability.
             logger.warning(f"[inspect] tool {tool_call.tool} failed: {e}")
             tool_result = None
         second_pass_ms = (time.perf_counter() - t_sp) * 1000
@@ -513,6 +637,15 @@ async def inspect(request: Request):
     if second_pass is not None:
         result["second_pass"] = second_pass
 
+    # Frame sequence / timestamp metadata for audit and UI (spec section 9 stale-frame safeguard)
+    # Always include at least first frame; when two lightings used, include both
+    if frame_info_for_result is not None:
+        result["frames"] = frame_info_for_result
+        result["frame_info"] = f"LOOK 1: {frame_info_for_result[0]['timestamp']} frame #{frame_info_for_result[0]['seq']} ({frame_info_for_result[0]['lighting']}) -> LOOK 2: {frame_info_for_result[1]['timestamp']} frame #{frame_info_for_result[1]['seq']} ({frame_info_for_result[1]['lighting']})"
+    else:
+        result["frames"] = [{"seq": first_seq, "timestamp": first_frame_timestamp, "lighting": first_lighting}]
+        result["frame_info"] = f"LOOK 1: {first_frame_timestamp} frame #{first_seq} ({first_lighting})"
+
     # --- Timing instrumentation for Experiment D (COOL baseline comparison) ---
     total_ms = (time.perf_counter() - t_total_start) * 1000
     measurements = {
@@ -542,15 +675,21 @@ async def inspect(request: Request):
         pass
 
     job_id = uuid.uuid4().hex[:8]
+    # Cache frame for genuine two-lighting follow-up (original_job_id + image2)
+    try:
+        FRAME_CACHE[job_id] = {"frame": frame, "timestamp": first_frame_timestamp, "seq": first_seq, "lighting": first_lighting, "profile": profile_name, "roi": roi}
+        # Bound cache size (keep last 100)
+        if len(FRAME_CACHE) > 100:
+            oldest = next(iter(FRAME_CACHE))
+            del FRAME_CACHE[oldest]
+    except Exception:
+        pass
     # Use JobStore abstraction — InMemory wraps JOBS dict, Dynamo writes to table. Never crash on store errors.
     try:
         store.save(job_id, result)
     except Exception as e:
-        # Storage layer already logs, but ensure the request still succeeds (store is best-effort).
         import logging
-
         logging.getLogger(__name__).error(f"[inspect] store.save failed job_id={job_id}: {e}")
-        # As a last resort, ensure the in-memory dict still has it so the immediate GET can succeed
         JOBS[job_id] = result
 
     return JSONResponse({"job_id": job_id})

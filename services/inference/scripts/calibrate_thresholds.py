@@ -42,7 +42,7 @@ import numpy as np
 # or `python -m scripts.calibrate_thresholds` or via pytest.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from cv.first_pass import measure_region  # type: ignore
+from cv.first_pass import measure_region, measure_pattern_visibility  # type: ignore
 
 SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif"}
 
@@ -100,8 +100,12 @@ def _get_reference_for_frame(ref_img: Optional[np.ndarray], frame: np.ndarray) -
 def calibrate(dataset_root: Path, reference_path: Optional[Path] = None) -> Dict[str, Dict[str, List[float]]]:
     """
     Walk dataset_root, expecting subfolders per label each containing images.
+    Supports both profiles: fdm (clean/layer_shift/...) and water (clear/turbid/borderline).
     Returns: {label: {"edge_continuity": [...], "reference_similarity": [...],
-                      "layer_alignment_deviation": [...], "local_contrast": [...]} }
+                      "layer_alignment_deviation": [...], "local_contrast": [...],
+                      "pattern_visibility": [...], "pattern_sharpness": [...] } }
+    Water metrics (pattern_*) are measured via measure_pattern_visibility along
+    side the fdm metrics so the same dataset can calibrate either profile.
     """
     dataset_root = Path(dataset_root)
     if not dataset_root.is_dir():
@@ -150,7 +154,7 @@ def calibrate(dataset_root: Path, reference_path: Optional[Path] = None) -> Dict
 
     for label_dir in sorted(subdirs):
         label = label_dir.name
-        metrics = {"edge_continuity": [], "reference_similarity": [], "layer_alignment_deviation": [], "local_contrast": []}
+        metrics = {"edge_continuity": [], "reference_similarity": [], "layer_alignment_deviation": [], "local_contrast": [], "pattern_visibility": [], "pattern_sharpness": []}
         # Collect image paths
         image_paths: List[Path] = []
         for ext in SUPPORTED_EXTS:
@@ -179,13 +183,19 @@ def calibrate(dataset_root: Path, reference_path: Optional[Path] = None) -> Dict
                 continue
             roi = (0, 0, w, h)
             ref_for_this = _get_reference_for_frame(ref_img, frame)
-            # If this image IS the reference source itself, ref_for_this == frame
-            # That yields similarity 1.0 which is correct for clean self-comparison.
             region = measure_region(frame, ref_for_this, roi)
             metrics["edge_continuity"].append(float(region.edge_continuity))
             metrics["reference_similarity"].append(float(region.reference_similarity))
             metrics["layer_alignment_deviation"].append(float(region.layer_alignment_deviation))
             metrics["local_contrast"].append(float(region.local_contrast))
+            # Water metrics — same ROI, Secchi-disk principle
+            try:
+                w_region = measure_pattern_visibility(frame, roi)
+                metrics["pattern_visibility"].append(float(w_region.pattern_visibility))
+                metrics["pattern_sharpness"].append(float(w_region.pattern_sharpness))
+            except Exception:
+                metrics["pattern_visibility"].append(0.0)
+                metrics["pattern_sharpness"].append(0.0)
 
         if any(metrics[k] for k in metrics):
             raw[label] = metrics
@@ -210,28 +220,17 @@ def compute_table(raw: Dict[str, Dict[str, List[float]]]) -> Dict[str, Dict[str,
 def suggest_thresholds(raw: Dict[str, Dict[str, List[float]]]) -> Dict[str, float]:
     """
     Suggest concrete InspectionProfile thresholds based on where clean vs.
-    defect distributions separate.
-
-    Logic:
-    - clean = raw["clean"] if present; defects = aggregate of all other labels.
-      If no clean label, fall back to using global percentiles (not ideal, but
-      never crashes — prints a warning and uses overall distribution).
-    - For edge_continuity (defect = low, clean = high):
-        If defect_max < clean_min (separable): gap = clean_min - defect_max
-          confident_fail = defect_max + gap*0.3 (just above worst defect)
-          confident_pass = clean_min - gap*0.3 (just below best clean)
-        Else overlapping: fail = percentile(defect, 75) clipped, pass = percentile(clean, 25)
-        Ensure fail < pass, with fallback to means if needed.
-    - For reference_similarity_floor (clean high, defect lower):
-        If defect_max < clean_min: floor = (defect_max + clean_min)/2
-        Else floor = (defect_mean + clean_mean)/2
-    - For contrast_min_for_confidence (low contrast = ambiguous):
-        Use contrast distribution. If clean vs low/aggregate separable, put
-        threshold in the gap. Otherwise use a fraction of clean min.
+    defect distributions separate. Handles both profiles:
+    - fdm: edge_continuity / reference_similarity / contrast
+    - water: pattern_visibility / sharpness (clear vs turbid/borderline)
     Returns dict with keys: edge_continuity_confident_fail,
                             edge_continuity_confident_pass,
                             contrast_min_for_confidence,
-                            reference_similarity_floor
+                            reference_similarity_floor,
+                            pattern_visibility_confident_turbid,
+                            pattern_visibility_confident_clear
+    Water thresholds use the same gap-based logic as edge_continuity but
+    on pattern_visibility where clear=high, turbid=low.
     """
     has_clean = "clean" in raw and any(raw["clean"].values())
     # Aggregate defects
@@ -372,6 +371,66 @@ def suggest_thresholds(raw: Dict[str, Dict[str, List[float]]]) -> Dict[str, floa
         else:
             suggestions["contrast_min_for_confidence"] = 0.40
 
+    # --- water pattern_visibility thresholds (clear=high, turbid=low) ---
+    # Accept both naming conventions: clear vs clean as high-side label
+    has_clear = any(k in raw for k in ["clear", "clean"]) and any(raw.get(k, {}).get("pattern_visibility") for k in ["clear", "clean"] if k in raw)
+    # Determine high-side label (clear or clean) and low-side aggregates (turbid/borderline/defect)
+    high_label = "clear" if "clear" in raw else ("clean" if "clean" in raw else None)
+    high_vis = raw.get(high_label, {}).get("pattern_visibility", []) if high_label else []
+    # Low side = all other labels' pattern_visibility
+    low_vis: List[float] = []
+    for label, metrics in raw.items():
+        if label == high_label:
+            continue
+        low_vis.extend(metrics.get("pattern_visibility", []))
+    # Only suggest if we have at least some high/low signal
+    if high_label and high_vis and low_vis:
+        l_max = float(np.max(low_vis))
+        h_min = float(np.min(high_vis))
+        l_mean = float(np.mean(low_vis))
+        h_mean = float(np.mean(high_vis))
+        if l_max < h_min:
+            gap = h_min - l_max
+            turbid = l_max + gap * 0.3
+            clear = h_min - gap * 0.3
+            turbid = max(0.0, min(1.0, turbid))
+            clear = max(0.0, min(1.0, clear))
+            if turbid >= clear:
+                mid = (l_mean + h_mean) / 2.0
+                turbid = max(0.0, mid - 0.15)
+                clear = min(1.0, mid + 0.15)
+        else:
+            try:
+                l_p75 = float(np.percentile(low_vis, 75))
+                h_p25 = float(np.percentile(high_vis, 25))
+            except Exception:
+                l_p75 = l_mean
+                h_p25 = h_mean
+            if l_p75 < h_p25:
+                turbid = l_p75
+                clear = h_p25
+            else:
+                mid = (l_mean + h_mean) / 2.0
+                turbid = max(0.0, mid - 0.15)
+                clear = min(1.0, mid + 0.15)
+            if turbid >= clear:
+                turbid = max(0.0, min(l_mean + float(np.std(low_vis)) * 0.5, 1.0))
+                clear = max(turbid + 0.05, min(h_mean - float(np.std(high_vis)) * 0.5, 1.0))
+                if turbid >= clear:
+                    turbid, clear = 0.20, 0.55
+        suggestions["pattern_visibility_confident_turbid"] = round(float(turbid), 4)
+        suggestions["pattern_visibility_confident_clear"] = round(float(clear), 4)
+    elif high_vis or low_vis:
+        all_vis = high_vis + low_vis
+        if all_vis:
+            lo = float(np.percentile(all_vis, 25))
+            hi = float(np.percentile(all_vis, 75))
+            if lo >= hi:
+                lo, hi = 0.20, 0.55
+            suggestions["pattern_visibility_confident_turbid"] = round(lo, 4)
+            suggestions["pattern_visibility_confident_clear"] = round(hi, 4)
+    # If no water data at all, leave absent — caller will see fdm-only suggestions
+
     return suggestions
 
 
@@ -385,8 +444,8 @@ def print_report(raw: Dict[str, Dict[str, List[float]]], table: Dict[str, Dict[s
     print(f"Total images measured: {total_images}")
     print("-" * 88)
 
-    # Table per label
-    metrics_order = ["edge_continuity", "reference_similarity", "layer_alignment_deviation", "local_contrast"]
+    # Table per label — show water metrics as well when present
+    metrics_order = ["edge_continuity", "reference_similarity", "layer_alignment_deviation", "local_contrast", "pattern_visibility", "pattern_sharpness"]
     # Print column header
     header = f"{'label':<18} {'metric':<28} {'count':>5} {'min':>9} {'max':>9} {'mean':>9} {'std':>9}"
     print(header)
@@ -404,14 +463,14 @@ def print_report(raw: Dict[str, Dict[str, List[float]]], table: Dict[str, Dict[s
     print("  These are the gaps where clean vs defect distributions separate.")
     print("  Copy into cv/first_pass.py PROFILES or pass as a new profile.")
     print("-" * 88)
-    for k in ["edge_continuity_confident_fail", "edge_continuity_confident_pass", "contrast_min_for_confidence", "reference_similarity_floor"]:
+    for k in ["edge_continuity_confident_fail", "edge_continuity_confident_pass", "contrast_min_for_confidence", "reference_similarity_floor", "pattern_visibility_confident_turbid", "pattern_visibility_confident_clear"]:
         v = suggestions.get(k)
         if v is not None:
             print(f"  {k:<35} = {v}")
 
     print("\nPython snippet for PROFILES:")
     print("  PROFILES[\"calibrated_v1\"] = InspectionProfile(")
-    for k in ["edge_continuity_confident_fail", "edge_continuity_confident_pass", "contrast_min_for_confidence", "reference_similarity_floor"]:
+    for k in ["edge_continuity_confident_fail", "edge_continuity_confident_pass", "contrast_min_for_confidence", "reference_similarity_floor", "pattern_visibility_confident_turbid", "pattern_visibility_confident_clear"]:
         v = suggestions.get(k)
         print(f"      {k}={v},")
     print("      name=\"calibrated_v1\",")

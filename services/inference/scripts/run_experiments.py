@@ -70,11 +70,16 @@ GT_FAIL = "FAIL"
 GT_REVIEW = "REVIEW"
 
 # Verdicts that count as "correct" for each ground-truth label.
+# Phase 4 fix: borderline must require REVIEW specifically — accepting any verdict artificial zeroes conditional_benefit (audit §4).
 CORRECT_VERDICTS: Dict[str, set] = {
     "clean": {GT_PASS},
     "broken": {GT_FAIL},
-    "borderline": {GT_REVIEW, GT_PASS, GT_FAIL},  # a hesitating human accepts any call
-    "low_contrast": {GT_REVIEW, GT_PASS, GT_FAIL},
+    # fdm borderline / water borderline: genuinely ambiguous must be REVIEW
+    "borderline": {GT_REVIEW},
+    "low_contrast": {GT_REVIEW},
+    # water profile labels
+    "clear": {GT_PASS},
+    "turbid": {GT_FAIL},
 }
 
 _FULL_ROI = (0, 0, 200, 200)
@@ -83,14 +88,27 @@ _FULL_ROI = (0, 0, 200, 200)
 # ---------------------------------------------------------------------------
 # Synthetic fixture dataset (dry-run)
 # ---------------------------------------------------------------------------
-def _load_synthetic_dataset() -> List[Tuple[str, np.ndarray]]:
+def _load_synthetic_dataset(profile: str = "water_turbidity_v1") -> List[Tuple[str, np.ndarray]]:
     """Build a labeled synthetic set: (label, frame). Stand-in for the real
-    self-captured set until it exists (spec Section 13)."""
+    self-captured set until it exists (spec Section 13). Supports both profiles."""
+    if profile == "water_turbidity_v1":
+        from tests.synthetic import make_checkerboard, make_turbid_water, make_clear_water, make_borderline_water
+        # Water: Secchi-disk checkerboard through clear vs turbid vs borderline
+        samples: List[Tuple[str, Callable[[], np.ndarray]]] = [
+            ("clear", make_clear_water),
+            ("clear", lambda: make_checkerboard(squares=8)),
+            ("turbid", lambda: make_turbid_water(make_checkerboard(), blur_ks=11, alpha=0.6, beta=20)),
+            ("turbid", lambda: make_turbid_water(make_checkerboard(), blur_ks=13, alpha=0.55, beta=25)),
+            ("borderline", make_borderline_water),
+            ("borderline", lambda: make_turbid_water(make_checkerboard(), blur_ks=7, alpha=0.80, beta=10)),
+            ("borderline", lambda: make_turbid_water(make_checkerboard(), blur_ks=9, alpha=0.70, beta=15)),
+            ("clear", make_clear_water),
+        ]
+        return [(label, gen()) for label, gen in samples]
+
     from tests.synthetic import make_clean_square, make_broken_square, make_low_contrast_frame
 
     def make_borderline() -> np.ndarray:
-        # The genuinely ambiguous case from tests/test_integration.py: a square
-        # with ONE side deliberately faint — local, partial ambiguity.
         img = make_clean_square()
         faded = img.copy()
         faded[35:45, :, :] = cv2.addWeighted(
@@ -99,8 +117,7 @@ def _load_synthetic_dataset() -> List[Tuple[str, np.ndarray]]:
         )
         return faded
 
-    # A few variants per label so the synthetic set has spread (not one image).
-    samples: List[Tuple[str, Callable[[], np.ndarray]]] = [
+    samples = [
         ("clean", make_clean_square),
         ("clean", make_clean_square),
         ("broken", lambda: make_broken_square(gap=20)),
@@ -212,7 +229,10 @@ def run_experiment_c(
     reference=None,
 ) -> Tuple[dict, FinalDecision, bool]:
     """C — adaptive (LoopSight's actual mechanic). Agent-selected second pass
-    based on the specific evidence gap, exactly as /inspect does."""
+    based on the specific evidence gap, exactly as /inspect does.
+    Phase 4: now wires track_across_frames for real — simulates second lighting
+    by creating a lightly different exposure of the same frame and calling
+    track_across_frames([frame, frame2])."""
     if first_pass.status != "UNCERTAIN":
         final = decide(first_pass, None, profile_name=profile)
         return {"triggered": False, "tool": None}, final, False
@@ -226,10 +246,22 @@ def run_experiment_c(
         result = fn(frame, _FULL_ROI, low=int(tool_call.arguments.get("low", 30)), high=int(tool_call.arguments.get("high", 100)))
     elif tool_call.tool == "compare_to_reference":
         result = fn(frame, reference if reference is not None else frame, _FULL_ROI)
+    elif tool_call.tool == "track_across_frames":
+        # Simulate second lighting: slightly different exposure/blur of same frame
+        # This exercises the real track_across_frames path (pattern_visibility persistence)
+        try:
+            frame2 = cv2.convertScaleAbs(frame, alpha=0.95, beta=5)
+            frame2 = cv2.GaussianBlur(frame2, (3, 3), 0)
+        except Exception:
+            frame2 = frame.copy() if hasattr(frame, "copy") else frame
+        result = fn([frame, frame2], _FULL_ROI)
     else:
         raise NotImplementedError(f"exp C not wired for {tool_call.tool}")
     final = decide(first_pass, result.region, profile_name=profile)
-    return {"triggered": True, "tool": tool_call.tool, "edge_continuity": result.region.edge_continuity}, final, True
+    # Return whichever metric is relevant for the profile
+    pv = getattr(result.region, "pattern_visibility", 0.0) or 0.0
+    metric = float(pv) if profile == "water_turbidity_v1" and pv else float(result.region.edge_continuity)
+    return {"triggered": True, "tool": tool_call.tool, "edge_continuity": float(result.region.edge_continuity), "pattern_visibility": float(pv), "metric": metric}, final, True
 
 
 # ---------------------------------------------------------------------------
@@ -320,12 +352,10 @@ def evaluate_experiment(
 # ---------------------------------------------------------------------------
 # Runner / report
 # ---------------------------------------------------------------------------
-def run_all(dataset: List[Tuple[str, np.ndarray]], profile: str = "fdm_print_surface_v1") -> Dict[str, Dict[str, float]]:
+def run_all(dataset: List[Tuple[str, np.ndarray]], profile: str = "water_turbidity_v1") -> Dict[str, Dict[str, float]]:
     """Run all four experiments and return {name: metrics}."""
-    # Run C first to get the real trigger rate for B2's matched budget.
     c_metrics = evaluate_experiment(run_experiment_c, dataset, profile)
     b2_kwargs = {"adaptive_trigger_rate": c_metrics["trigger_rate"]}
-
     return {
         "A": evaluate_experiment(run_experiment_a, dataset, profile),
         "B": evaluate_experiment(run_experiment_b, dataset, profile),
@@ -390,15 +420,15 @@ def main() -> None:
         "dataset", nargs="?", default=None,
         help="optional path to labeled dataset (subfolders: clean/, broken/, borderlines/, low_contrast/)",
     )
-    parser.add_argument("--profile", default="fdm_print_surface_v1", help="InspectionProfile name")
+    parser.add_argument("--profile", default="water_turbidity_v1", help="InspectionProfile name")
     args = parser.parse_args()
 
     if args.dataset:
         dataset = _load_real_dataset(Path(args.dataset))
         print("[info] evaluating real dataset from", args.dataset)
     else:
-        dataset = _load_synthetic_dataset()
-        print("[info] DRY RUN: evaluating synthetic fixtures (no real photos yet)")
+        dataset = _load_synthetic_dataset(profile=args.profile)
+        print("[info] DRY RUN: evaluating synthetic fixtures (no real photos yet) — profile", args.profile)
 
     print(f"[info] {len(dataset)} labeled images, profile={args.profile}")
     results = run_all(dataset, profile=args.profile)

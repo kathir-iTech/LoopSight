@@ -50,12 +50,12 @@
 
 ## 1:05 — The Wow Moment: Borderline Water Needs Different Lighting (45s)
 
-**Visual:** Live demo tab 2 — upload the **borderline turbid** fixture (pattern_visibility 0.32 in the 0.20-0.55 band). This is the rehearsed genuinely ambiguous case.
+**Visual:** Live demo tab 2 — upload the **borderline turbid** fixture (pattern_visibility 0.32 in the 0.20-0.55 band). This is the rehearsed genuinely ambiguous case. After landing on the trace page, scroll to the **second lighting prompt** that appears only for UNCERTAIN water cases: "Take a second photo — different lighting" with lighting selector (backlight/ambient/flash) and upload/camera.
 
-**Script (≈65 words):**
-> "Now the hard one. First pass scores pattern visibility 0.32 — solidly in the borderline band — evidence gap reads: 'pattern visibility 0.32 in borderline band (0.2-0.55) — request photo under different lighting (backlight vs ambient or with phone flash).' The agent fires: it picks `track_across_frames` with reason `BORDERLINE_PATTERN_VISIBILITY` — you see it as a decision node with the tool in a code chip and a connector from Section 1. Second observation re-measures the pattern at higher resolution — this is the Secchi technique in the literature: backlight reveals what ambient hides — and updates the clarity gauge. Final decision: REVIEW or FAIL with 'Visible turbidity detected — do not drink without treatment.' That's the thesis: borderline visibility triggered a materially different lighting-aware observation, and the trace shows it."
+**Script (≈70 words):**
+> "Now the hard one. First pass scores pattern visibility 0.32 — solidly in the borderline band — evidence gap reads: 'pattern visibility 0.32 in borderline band (0.2-0.55) — request photo under different lighting (backlight vs ambient or with phone flash).' The agent fires: it picks `track_across_frames` with reason `BORDERLINE_PATTERN_VISIBILITY` — you see it as a decision node with the tool in a code chip and a connector from Section 1. I tap 'Take a second photo with backlight' and submit that second lighting — the trace now shows LOOK 1: 12:41:07.183 · frame #1842 (ambient) → LOOK 2: 12:41:07.431 · frame #1849 (backlight) and a persistence note on pattern_visibility (low = persistent, likely real). Final decision: REVIEW or FAIL with 'Visible turbidity detected — do not drink without treatment.' That's the thesis: borderline visibility triggered a materially different lighting-aware observation — not a simulated crop — and the trace proves the two lightings."
 
-**What must be visible:** Amber evidence gap with lighting request, Agent Decision card (track_across_frames + reason), New Evidence second gauge, Final Decision with safety copy, timings, Copy/Share/PDF.
+**What must be visible:** Amber evidence gap with lighting request, Agent Decision card (track_across_frames + `BORDERLINE_PATTERN_VISIBILITY` or `BORDERLINE_TWO_LIGHTINGS`), second lighting prompt card (selector + upload), after submit New Evidence second gauge with LOOK 1→LOOK 2 timestamps + persistence_std, Final Decision with safety copy, timings, Copy/Share/PDF.
 
 **If the live backend hiccups:** narrate golden fallback from `demo_golden.py` — same trace shape, precomputed so the demo never fully breaks — then show `/version` proof that the live pipeline exists separately and lists both profiles.
 
@@ -63,10 +63,10 @@
 
 ## 1:50 — What Changed? Side-by-Side (15s)
 
-**Visual:** Split screen: first-pass gauge (0.32 borderline) vs second-pass gauge (e.g., 0.17 turbid after different processing). Highlight that pattern_visibility moved and sharpness/local_contrast updated — not a duplicate read, but a different processing path (upsampled crop via reinspect_roi or different thresholds). Show the track_across_frames note: persistence on pattern_visibility.
+**Visual:** Split screen: first-pass gauge (0.32 borderline) vs second-pass gauge (e.g., 0.17 turbid after second lighting). Highlight that pattern_visibility moved and persistence_std shows whether turbidity persisted across lightings (low = real). Show in trace: `frames: [seq 1842 @12:41:07.183 (ambient), seq 1849 @12:41:07.431 (backlight)]` and note `persistence_std=0.04`.
 
-**Script (≈25 words):**
-> "This wasn't a duplicate read. The second look changed the observation — upsampled pattern region or different thresholds — so the visibility evidence actually changed before the policy decided."
+**Script (≈30 words):**
+> "This wasn't a duplicate read or a simulated crop. LOOK 1 was ambient, LOOK 2 was backlight — two genuinely different lightings — and persistence tells us the turbidity persisted, so the visibility evidence actually changed before the policy decided."
 
 ---
 
@@ -140,9 +140,9 @@
 ## Rehearsal Notes
 
 - **Time control:** Use a visible timer. If long, cut 2:25 evaluation detail and keep the wow moment + real-photo demo — those score Technical Execution and Real-World Impact.
-- **Two-tabs trick:** Have two browser tabs pre-loaded (one clear, one borderline) so you don't waste seconds waiting for an upload.
+- **Two-tabs trick:** Have two browser tabs pre-loaded (one clear, one borderline) so you don't waste seconds waiting for an upload. Pre-load the second lighting photo (backlight) on your phone so the second submit is one tap.
 - **Backup if Lambda is cold:** Have `DEMO_MODE=golden` tab ready and narrate it as designed fallback, not failure.
-- **Physical prop:** Bring the actual A4 checkerboard and two glasses (clear vs. clouded with flour) — hold them up while the gauge is on screen — strongest possible demo of "one pattern, two waters, one trace."
+- **Physical prop:** Bring the actual A4 checkerboard and two glasses (clear vs. clouded with flour) — hold them up while the gauge is on screen — strongest possible demo of "one pattern, two waters, one trace." Demo the backlight by holding phone flash behind the glass live.
 - **No claims beyond evidence:** Don't quote accuracy until `run_experiments.py` has run on real photos. Say "harness verified on synthetic, pending real dataset." And never say "safe to drink" — always deliver the safety framing verbatim.
 - **Safety first:** Judges will notice the banner on first load. Lead with it — it shows ethical design, not an afterthought.
 
