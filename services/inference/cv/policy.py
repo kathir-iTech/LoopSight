@@ -59,7 +59,37 @@ def decide(
             reasoning=["first pass uncertain, no second-pass evidence available"],
         )
 
-    # Second pass ran — did it actually resolve the ambiguity?
+    # Water profile: second pass resolves via pattern visibility, not edge continuity
+    if profile_name == "water_turbidity_v1":
+        # Prefer pattern_visibility when available; fallback to edge_continuity (aliased)
+        pv = getattr(second_pass_region, "pattern_visibility", 0.0) or 0.0
+        # If pattern_visibility is 0 but edge_continuity has signal, use edge as fallback
+        metric_val = pv if pv > 0 else second_pass_region.edge_continuity
+        if metric_val >= profile.pattern_visibility_confident_clear:
+            return FinalDecision(
+                decision="PASS",
+                confidence_band="medium",
+                evidence_changed=True,
+                human_approval_required=False,
+                reasoning=[f"second-pass pattern visibility {metric_val:.2f} resolved toward clear water (no visible turbidity)"],
+            )
+        if metric_val <= profile.pattern_visibility_confident_turbid:
+            return FinalDecision(
+                decision="FAIL",
+                confidence_band="medium",
+                evidence_changed=True,
+                human_approval_required=True,
+                reasoning=[f"second-pass pattern visibility {metric_val:.2f} resolved toward turbid water (visible turbidity)"],
+            )
+        return FinalDecision(
+            decision="REVIEW",
+            confidence_band="low",
+            evidence_changed=True,
+            human_approval_required=True,
+            reasoning=[f"second-pass pattern visibility {metric_val:.2f} still in borderline band — genuine REVIEW, request different lighting or lab test"],
+        )
+
+    # FDM and generic profiles: edge continuity
     ec = second_pass_region.edge_continuity
     if ec >= profile.edge_continuity_confident_pass:
         return FinalDecision(

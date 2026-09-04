@@ -10,9 +10,9 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "LoopSight — Uncertainty-triggered visual inspection",
+  title: "LoopSight — Check your water before you drink it",
   description:
-    "Uncertainty-triggered visual inspection for 3D prints. OpenCV 5 + agent second look.",
+    "Household drinking-water turbidity screening — photograph a printed pattern through water, get a clarity check. Flags cloudy water for follow-up. Not a substitute for a lab test. OpenCV 5 + agentic second look under different lighting.",
 };
 
 export default function RootLayout({
@@ -22,15 +22,15 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={inter.variable}>
-      <body className={`${inter.className} bg-[#0a0a0f] text-[#ededed] antialiased`}>
+      <body className={`${inter.className} bg-[#0a1628] text-[#e6f0ff] antialiased`}>
         {children}
         <Toaster
           position="bottom-right"
           toastOptions={{
             style: {
-              background: "#12121a",
-              color: "#ededed",
-              border: "1px solid #1e1e2e",
+              background: "#0f2942",
+              color: "#e6f0ff",
+              border: "1px solid #1e3a5f",
               fontSize: "14px",
             },
             success: {

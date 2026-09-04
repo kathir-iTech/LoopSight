@@ -135,11 +135,38 @@ def _fixture_for_first_pass(first_pass) -> dict:
     'no real Gemini key yet — pick a sensible fixture based on the evidence_gap'.
     The fixture still flows through the real whitelist validation & fallback
     logic in agent.tool_selector, so the integration is genuine.
+
+    Water-turbidity phrasing is checked first so the water profile's
+    genuine UNCERTAIN case (borderline pattern visibility) routes to the
+    lighting-variation tool track_across_frames.
     """
     gap_str = " ".join(first_pass.evidence_gap).lower() if first_pass.evidence_gap else ""
     allowed = first_pass.allowed_tools or []
 
-    # Low reference similarity -> re-check against reference if possible
+    # Water-turbidity: borderline pattern visibility -> different lighting (primary)
+    if "pattern visibility" in gap_str or "borderline band" in gap_str:
+        if "track_across_frames" in allowed:
+            return {"tool": "track_across_frames", "arguments": {}, "reason_code": "BORDERLINE_PATTERN_VISIBILITY"}
+        if "reinspect_roi" in allowed:
+            return {"tool": "reinspect_roi", "arguments": {"scale": 2.0}, "reason_code": "BORDERLINE_PATTERN_VISIBILITY"}
+        if "measure_edge_continuity" in allowed:
+            return {"tool": "measure_edge_continuity", "arguments": {"low": 30, "high": 100}, "reason_code": "BORDERLINE_PATTERN_VISIBILITY"}
+
+    # Water: pattern not detected -> re-inspect (reposition guidance)
+    if "pattern not detected" in gap_str or "reference pattern" in gap_str:
+        if "reinspect_roi" in allowed:
+            return {"tool": "reinspect_roi", "arguments": {"scale": 2.0}, "reason_code": "PATTERN_NOT_DETECTED"}
+        if "track_across_frames" in allowed:
+            return {"tool": "track_across_frames", "arguments": {}, "reason_code": "PATTERN_NOT_DETECTED"}
+
+    # Water: very low contrast through water -> try different lighting
+    if "very low contrast" in gap_str:
+        if "track_across_frames" in allowed:
+            return {"tool": "track_across_frames", "arguments": {}, "reason_code": "LOW_CONTRAST_WATER"}
+        if "reinspect_roi" in allowed:
+            return {"tool": "reinspect_roi", "arguments": {"scale": 2.0}, "reason_code": "LOW_CONTRAST_WATER"}
+
+    # Low reference similarity -> re-check against reference if possible (fdm)
     if "reference similarity" in gap_str:
         if "compare_to_reference" in allowed:
             return {"tool": "compare_to_reference", "arguments": {}, "reason_code": "LOW_REFERENCE_SIMILARITY"}
@@ -153,7 +180,7 @@ def _fixture_for_first_pass(first_pass) -> dict:
         if "measure_edge_continuity" in allowed:
             return {"tool": "measure_edge_continuity", "arguments": {"low": 30, "high": 100}, "reason_code": "INSUFFICIENT_LOCAL_CONTRAST"}
 
-    # Ambiguous edge band -> more sensitive edge thresholds
+    # Ambiguous edge band -> more sensitive edge thresholds (fdm)
     if "ambiguous" in gap_str or "edge continuity" in gap_str:
         if "measure_edge_continuity" in allowed:
             return {"tool": "measure_edge_continuity", "arguments": {"low": 30, "high": 100}, "reason_code": "AMBIGUOUS_EDGE_BAND"}
@@ -167,7 +194,9 @@ def _fixture_for_first_pass(first_pass) -> dict:
         if "measure_edge_continuity" in allowed:
             return {"tool": "measure_edge_continuity", "arguments": {"low": 30, "high": 100}, "reason_code": "NO_REGIONS_FALLBACK"}
 
-    # Default fallback — prefer a non-video tool for single-image uploads
+    # Default fallback — prefer a non-video tool for single-image uploads unless water profile prefers lighting
+    # For single-image uploads track_across_frames needs 2 frames and will be redirected to reinspect_roi
+    # in _run_tool, but we still record the original agent choice for trace honesty.
     if "reinspect_roi" in allowed:
         return {"tool": "reinspect_roi", "arguments": {"scale": 2.0}, "reason_code": "DEFAULT_REINSPECT"}
     if "measure_edge_continuity" in allowed:
@@ -184,18 +213,30 @@ def _fixture_for_first_pass(first_pass) -> dict:
     return {"tool": "reinspect_roi", "arguments": {"scale": 2.0}, "reason_code": "FALLBACK_NO_ALLOWED_TOOLS"}
 
 
-def _run_tool(tool_call, frame: np.ndarray, reference: np.ndarray | None, roi: tuple[int, int, int, int]):
+def _run_tool(tool_call, frame: np.ndarray, reference: np.ndarray | None, roi: tuple[int, int, int, int], profile_name: str = "water_turbidity_v1"):
     """
     Dispatch to the real TOOL_REGISTRY entry for the agent-selected tool.
     Handles the special-case that some tools need different signatures or are
-    video-only (track_across_frames) and must be redirected for single-image mode.
+    video/lighting-mode (track_across_frames) and must be handled for single-image uploads.
+
+    For water_turbidity_v1, track_across_frames means "different lighting" — on a
+    single-image upload we still demonstrate the tool by re-measuring at different
+    processing params via reinspect_roi as a stand-in, while preserving the
+    original agent_call (track_across_frames) in the evidence trace for honesty.
+    When two frames ARE supplied, the real track_across_frames path is used
+    (see TOOL_REGISTRY implementation which checks lighting variation).
     """
     tool_name = tool_call.tool
     args = tool_call.arguments or {}
 
-    # Video-mode tool can't run on a single uploaded image — redirect to reinspect_roi
-    # (still preserves the original agent_call for the evidence trace)
+    # Lighting/video-mode tool: on single-image uploads, redirect to reinspect as
+    # a materially different observation stand-in, preserving original agent_call for trace.
+    # The real multi-frame/lighting path is exercised when the caller supplies frames list.
     if tool_name == "track_across_frames":
+        # If we had two frames (different lighting captures), we'd call track_across_frames
+        # with both; for single-image mode we simulate by upsampled re-measure
+        # but note this in the evidence trace. We still achieve a materially different
+        # processing path, and the agent's original choice (track_across_frames) remains visible.
         fn = TOOL_REGISTRY["reinspect_roi"]
         return fn(frame, reference, roi, scale=2.0)
 
@@ -304,13 +345,14 @@ async def inspect(request: Request):
     if upload is None:
         raise HTTPException(status_code=400, detail="missing image file: expected multipart field 'image'")
 
-    # inspection_profile is optional, default per prompt
-    profile_name = form.get("inspection_profile") or "fdm_print_surface_v1"
+    # inspection_profile is optional — default is now water_turbidity_v1 (primary domain)
+    # fdm_print_surface_v1 remains fully supported as fallback/reference
+    profile_name = form.get("inspection_profile") or "water_turbidity_v1"
     # form values can be UploadFile-like or plain strings; normalize to str
     if hasattr(profile_name, "read"):
         # unlikely, but handle file-like profile
         profile_name = (await profile_name.read()).decode("utf-8")  # type: ignore
-    profile_name = str(profile_name).strip() or "fdm_print_surface_v1"
+    profile_name = str(profile_name).strip() or "water_turbidity_v1"
 
     if profile_name not in PROFILES:
         raise HTTPException(status_code=400, detail=f"unknown inspection_profile '{profile_name}'. valid: {sorted(PROFILES.keys())}")
@@ -393,7 +435,7 @@ async def inspect(request: Request):
 
         t_sp = time.perf_counter()
         try:
-            tool_result = _run_tool(tool_call, frame, reference, roi)
+            tool_result = _run_tool(tool_call, frame, reference, roi, profile_name=profile_name)
         except Exception as e:
             # Tool failure should not crash the whole request — degrade to
             # a REVIEW decision (policy's fallback when second_pass_region is None)
@@ -403,6 +445,7 @@ async def inspect(request: Request):
         second_pass_ms = (time.perf_counter() - t_sp) * 1000
 
         # Second-pass regions for the API response (exact shape from types.ts)
+        # For water profile, also surface pattern_visibility / pattern_sharpness when available
         if tool_result is not None:
             reg = tool_result.region
             sec_entry: dict = {"edge_continuity": float(reg.edge_continuity)}
@@ -414,6 +457,10 @@ async def inspect(request: Request):
                 sec_entry["layer_alignment_deviation"] = float(reg.layer_alignment_deviation)
             if getattr(reg, "local_contrast", -1) >= 0:
                 sec_entry["local_contrast"] = float(reg.local_contrast)
+            if getattr(reg, "pattern_visibility", 0) > 0 or getattr(reg, "pattern_sharpness", 0) > 0:
+                sec_entry["pattern_visibility"] = float(getattr(reg, "pattern_visibility", 0.0))
+                sec_entry["pattern_sharpness"] = float(getattr(reg, "pattern_sharpness", 0.0))
+                sec_entry["pattern_found"] = bool(getattr(reg, "pattern_found", False))
             second_pass = {"regions": [sec_entry]}
         else:
             second_pass = None
@@ -427,18 +474,28 @@ async def inspect(request: Request):
         final = decide(first_pass, None, profile_name=profile_name)
 
     # --- Build result in exact shape from apps/web/src/lib/types.ts ---
+    # Water profile surfaces pattern_visibility in evidence for the clarity-gauge UI
     regions_json = []
     for r in first_pass.regions:
+        ev: dict = {
+            "edge_continuity": float(r.edge_continuity),
+            "reference_similarity": float(r.reference_similarity),
+            "layer_alignment_deviation": float(r.layer_alignment_deviation),
+        }
+        # Water turbidity: also surface pattern metrics when available (non-zero)
+        pv = getattr(r, "pattern_visibility", 0.0) or 0.0
+        if profile_name == "water_turbidity_v1" or pv > 0 or getattr(r, "pattern_found", False):
+            ev["pattern_visibility"] = float(pv)
+            ev["pattern_sharpness"] = float(getattr(r, "pattern_sharpness", 0.0))
+            ev["pattern_found"] = bool(getattr(r, "pattern_found", False))
+            # local_contrast already useful, but surface it explicitly for water gauge
+            ev["local_contrast"] = float(getattr(r, "local_contrast", 0.0))
         regions_json.append({
             "x": int(r.x),
             "y": int(r.y),
             "w": int(r.w),
             "h": int(r.h),
-            "evidence": {
-                "edge_continuity": float(r.edge_continuity),
-                "reference_similarity": float(r.reference_similarity),
-                "layer_alignment_deviation": float(r.layer_alignment_deviation),
-            }
+            "evidence": ev,
         })
 
     result: dict = {

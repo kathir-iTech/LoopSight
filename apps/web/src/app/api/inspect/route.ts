@@ -8,9 +8,9 @@ export async function POST(request: NextRequest) {
   const formData = await request.formData().catch(() => new FormData());
 
   try {
-    // Ensure default profile if the frontend did not send one
+    // Ensure default profile if the frontend did not send one — now water_turbidity_v1 primary
     if (!formData.get("inspection_profile")) {
-      formData.set("inspection_profile", "fdm_print_surface_v1");
+      formData.set("inspection_profile", "water_turbidity_v1");
     }
 
     // Demo resilience: when the backend is in DEMO_MODE=golden, or the web

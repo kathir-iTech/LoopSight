@@ -35,6 +35,11 @@ except Exception:
 # Swapping "fdm_print_surface_v1" for a different profile (e.g. a future
 # "pcb_solder_v1") changes thresholds and vocabulary, not this module's code.
 # See spec Section 5's Revision 2 note.
+#
+# water_turbidity_v1 is the new primary profile (added 2026-09-05):
+# household drinking-water turbidity screening via printed pattern behind
+# a clear glass. Same Secchi-disk principle: pattern visibility through
+# water is the signal. fdm_print_surface_v1 is kept intact as fallback.
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -44,6 +49,10 @@ class InspectionProfile:
     edge_continuity_confident_pass: float
     contrast_min_for_confidence: float
     reference_similarity_floor: float
+    # water-turbidity-specific thresholds — only used when name == water_turbidity_v1
+    # pattern_visibility low = turbid/fail, high = clear/pass, middle = UNCERTAIN (needs second lighting)
+    pattern_visibility_confident_turbid: float = 0.20
+    pattern_visibility_confident_clear: float = 0.55
 
 
 PROFILES: dict[str, InspectionProfile] = {
@@ -59,6 +68,18 @@ PROFILES: dict[str, InspectionProfile] = {
         contrast_min_for_confidence=0.10,
         reference_similarity_floor=0.40,
     ),
+    "water_turbidity_v1": InspectionProfile(
+        name="water_turbidity_v1",
+        # Reused edge fields are kept for compatibility when generic policy reads them,
+        # but water's real decision uses pattern_visibility thresholds below — same
+        # numeric band (0.20-0.55) so generic fallback still works.
+        edge_continuity_confident_fail=0.20,
+        edge_continuity_confident_pass=0.55,
+        contrast_min_for_confidence=0.05,
+        reference_similarity_floor=0.40,
+        pattern_visibility_confident_turbid=0.20,
+        pattern_visibility_confident_clear=0.55,
+    ),
 }
 
 
@@ -72,6 +93,10 @@ class RegionEvidence:
     reference_similarity: float
     layer_alignment_deviation: float
     local_contrast: float
+    # water-turbidity fields — populated only when measured via measure_pattern_visibility
+    pattern_visibility: float = 0.0
+    pattern_sharpness: float = 0.0
+    pattern_found: bool = False
 
 
 @dataclass
@@ -92,6 +117,138 @@ def _local_contrast(gray_roi: np.ndarray) -> float:
     if gray_roi.size == 0:
         return 0.0
     return float(np.std(gray_roi)) / 128.0  # normalize roughly to 0..~1
+
+
+def _laplacian_sharpness(gray: np.ndarray) -> float:
+    """Variance of Laplacian — classic blur metric. High = sharp pattern,
+    low = blurred through turbid water. Raw var is unbounded, so callers
+    normalize via min(var/600, 1.0) based on synthetic calibration."""
+    if gray.size == 0:
+        return 0.0
+    return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+
+def _detect_reference_pattern(gray: np.ndarray) -> tuple[bool, str]:
+    """Try to detect the printed high-contrast reference pattern in-frame.
+    A printable A4 checkerboard/grid is detectable via cv2.findChessboardCorners;
+    fallback is contour-based square counting. Returns (found, method)."""
+    # Try common checkerboard inner-corner sizes: 7x7, 7x5, 6x5, 6x4, 4x3
+    for pattern_size in [(7, 7), (7, 5), (6, 5), (6, 4), (4, 3)]:
+        try:
+            ret, _ = cv2.findChessboardCorners(gray, pattern_size, None)
+            if ret:
+                return True, f"chessboard_{pattern_size[0]}x{pattern_size[1]}"
+        except Exception:
+            continue
+    # Fallback: count rectangular contours that could be grid squares
+    try:
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        contours, _ = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        # Count roughly square-like contours of plausible area
+        h, w = gray.shape[:2]
+        img_area = h * w
+        square_like = 0
+        for c in contours:
+            area = cv2.contourArea(c)
+            # square candidates: area between 0.2% and 10% of image, ~aspect 0.7-1.4
+            if not (img_area * 0.002 < area < img_area * 0.10):
+                continue
+            x, y, cw, ch = cv2.boundingRect(c)
+            if cw == 0 or ch == 0:
+                continue
+            aspect = cw / float(ch)
+            if 0.7 <= aspect <= 1.4:
+                peri = cv2.arcLength(c, True)
+                # squareness via approxPolyDP: 4 vertices
+                approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+                if len(approx) == 4:
+                    square_like += 1
+        # 8x8 checkerboard has 32 black squares; grid 8x8 has ~64 cells.
+        # Threshold of 8 square-like contours is enough to claim pattern present.
+        if square_like >= 8:
+            return True, f"contours_{square_like}_squares"
+    except Exception:
+        pass
+    return False, "none"
+
+
+def measure_pattern_visibility(
+    frame: np.ndarray,
+    roi: tuple[int, int, int, int],
+) -> RegionEvidence:
+    """Water-turbidity core measurement (water_turbidity_v1).
+
+    Place a printed high-contrast pattern (checkerboard/grid on A4) behind
+    or under a water sample in a clear glass, photograph it. This is the
+    Secchi-disk / turbidity-tube principle: pattern visibility through the
+    water is the actual signal.
+
+    Steps:
+      1. Detect the printed reference pattern in-frame via
+         cv2.findChessboardCorners (or contour square count fallback).
+      2. Measure contrast attenuation (local_contrast) and edge sharpness
+         (Laplacian variance) of the pattern as seen through the water.
+         High attenuation/blur = high turbidity, sharp/high-contrast = clear.
+      3. Combine into a single pattern_visibility score in 0..1.
+
+    Reuses the existing Canny/contour machinery, applied to this new signal
+    instead of print-surface edges.
+    """
+    x, y, w, h = roi
+    crop = frame[y:y + h, x:x + w]
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+
+    # Pattern detection
+    pattern_found, _method = _detect_reference_pattern(gray)
+
+    # Contrast attenuation
+    local_contrast = _local_contrast(gray)  # 0..~1
+    # Clamp contrast to [0,1] — very high std (checkerboard) caps at ~0.74 normally, but ensure
+    local_contrast = float(max(0.0, min(1.0, local_contrast)))
+
+    # Edge sharpness via Laplacian variance, normalized to 0..1 (600 = sharp threshold from synthetic calibration)
+    lap_var = _laplacian_sharpness(gray)
+    sharpness_norm = float(min(lap_var / 600.0, 1.0))
+
+    # Also compute Canny edge density as secondary sharpness signal
+    edges = cv2.Canny(gray, 50, 150)
+    edge_density = float(np.count_nonzero(edges)) / edges.size if edges.size else 0.0
+    # Normalize edge_density: typical clear checkerboard ~0.06-0.14, turbid ~0.0-0.02
+    # Scale so 0.08 maps to ~0.8, cap at 1.0
+    edge_sharp = float(min(edge_density * 10.0, 1.0))
+
+    # Combined visibility: weighted blend. Sharpness and contrast both drop with turbidity,
+    # so the blend separates clear (>0.55) from turbid (<0.20) on synthetic calibration:
+    # clear checkerboard: contrast 0.74 lap 5400 sharp 1.0 edge 0.065*10=0.65 => vis ~0.78
+    # turbid: contrast 0.26 sharp 0.014 edge 0.0 => vis ~0.13
+    # borderline: contrast 0.37 sharp 0.065 edge 0.65 => vis ~0.35
+    pattern_visibility = float(0.45 * local_contrast + 0.35 * sharpness_norm + 0.20 * edge_sharp)
+    pattern_visibility = float(max(0.0, min(1.0, pattern_visibility)))
+
+    # For generic policy compatibility, also populate edge_continuity with the same
+    # visibility value so a naive edge-based check still works as fallback.
+    edge_continuity = pattern_visibility
+
+    # Reference similarity not primary for water — keep at 1.0 unless a reference is supplied
+    # (handled by caller via measure_region for the reference case; here we just default)
+    reference_similarity = 1.0
+
+    # Layer alignment deviation not meaningful for water — reuse contour jaggedness as
+    # a secondary blur/irregularity proxy, but keep it simple: use edge_sharp inverse
+    # For now derive from contours of the edge map
+    contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    layer_alignment_deviation = _contour_deviation_score(contours, gray.shape)
+
+    return RegionEvidence(
+        x=x, y=y, w=w, h=h,
+        edge_continuity=edge_continuity,
+        reference_similarity=reference_similarity,
+        layer_alignment_deviation=layer_alignment_deviation,
+        local_contrast=local_contrast,
+        pattern_visibility=pattern_visibility,
+        pattern_sharpness=sharpness_norm,
+        pattern_found=pattern_found,
+    )
 
 
 def measure_region(
@@ -174,6 +331,42 @@ def score_evidence(regions: list[RegionEvidence], profile: InspectionProfile) ->
             allowed_tools=ALL_TOOLS,
         )
 
+    # Water-turbidity profile: pattern visibility through water is the signal
+    if profile.name == "water_turbidity_v1":
+        worst = min(regions, key=lambda r: r.pattern_visibility)
+        lowest_contrast = min(r.local_contrast for r in regions)
+
+        # No pattern detected in any ROI — user needs to reposition the printed reference
+        if not any(r.pattern_found for r in regions):
+            return FirstPassResult(
+                status="UNCERTAIN",
+                regions=regions,
+                evidence_gap=["reference pattern not detected — ensure the printed checkerboard/grid is visible behind the water sample"],
+                allowed_tools=["reinspect_roi", "track_across_frames"],
+            )
+
+        if lowest_contrast < profile.contrast_min_for_confidence:
+            return FirstPassResult(
+                status="UNCERTAIN",
+                regions=regions,
+                evidence_gap=["very low contrast — pattern not distinguishable through water, try a photo under different lighting (backlight or phone flash)"],
+                allowed_tools=ALL_TOOLS,
+            )
+
+        if worst.pattern_visibility <= profile.pattern_visibility_confident_turbid:
+            return FirstPassResult(status="CONFIDENT_FAIL", regions=regions)
+
+        if worst.pattern_visibility >= profile.pattern_visibility_confident_clear:
+            return FirstPassResult(status="CONFIDENT_PASS", regions=regions)
+
+        return FirstPassResult(
+            status="UNCERTAIN",
+            regions=regions,
+            evidence_gap=[f"pattern visibility {worst.pattern_visibility:.2f} in borderline band ({profile.pattern_visibility_confident_turbid}-{profile.pattern_visibility_confident_clear}) — request photo under different lighting (backlight vs ambient or with phone flash)"],
+            allowed_tools=["track_across_frames", "reinspect_roi", "measure_edge_continuity"],
+        )
+
+    # FDM print surface profile (original, kept intact)
     worst = min(regions, key=lambda r: r.edge_continuity)
     lowest_contrast = min(r.local_contrast for r in regions)
 
@@ -213,6 +406,21 @@ def run_first_pass(
     rois: list[tuple[int, int, int, int]],
     profile_name: str = "fdm_print_surface_v1",
 ) -> FirstPassResult:
+    if profile_name not in PROFILES:
+        raise ValueError(f"unknown inspection_profile '{profile_name}'. valid: {sorted(PROFILES.keys())}")
     profile = PROFILES[profile_name]
+    if profile_name == "water_turbidity_v1":
+        # Water turbidity: pattern visibility through water is the signal.
+        # Reference image is optional (clear-water baseline) — pattern visibility
+        # itself is measured without it; reference similarity is not primary here.
+        regions = [measure_pattern_visibility(frame, roi) for roi in rois]
+        # If a reference was supplied, optionally enrich with similarity info
+        if reference is not None:
+            for idx, roi in enumerate(rois):
+                ref_region = measure_region(reference, None, roi)
+                # Store reference similarity on the water region for UI transparency,
+                # but do not use it for the water decision (pattern visibility owns it).
+                regions[idx].reference_similarity = ref_region.reference_similarity
+        return score_evidence(regions, profile)
     regions = [measure_region(frame, reference, roi) for roi in rois]
     return score_evidence(regions, profile)

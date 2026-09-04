@@ -2,6 +2,11 @@ export interface RegionEvidence {
   edge_continuity: number;
   reference_similarity: number;
   layer_alignment_deviation: number;
+  // water-turbidity fields (present when inspection_profile == water_turbidity_v1)
+  pattern_visibility?: number;
+  pattern_sharpness?: number;
+  pattern_found?: boolean;
+  local_contrast?: number;
 }
 
 export interface Region {
@@ -19,7 +24,10 @@ export interface AgentCall {
 
 export interface SecondPassRegion {
   edge_continuity: number;
-  [key: string]: number;
+  pattern_visibility?: number;
+  pattern_sharpness?: number;
+  pattern_found?: boolean | number;
+  [key: string]: number | boolean | undefined;
 }
 
 export interface SecondPass {

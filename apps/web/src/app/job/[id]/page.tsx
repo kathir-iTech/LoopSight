@@ -33,7 +33,7 @@ function hasReference(result: InspectionResult): boolean {
   const gapMentionsRef = result.evidence_gap.some((g) => g.toLowerCase().includes("reference"));
   const anyNonOne = result.regions.some((r) => Math.abs(r.evidence.reference_similarity - 1.0) > 0.001);
   const secondHasRef =
-    result.second_pass?.regions.some((r) => r.reference_similarity !== undefined && Math.abs(r.reference_similarity - 1.0) > 0.001) ?? false;
+    result.second_pass?.regions.some((r) => r.reference_similarity !== undefined && typeof r.reference_similarity === "number" && Math.abs((r.reference_similarity as number) - 1.0) > 0.001) ?? false;
   return gapMentionsRef || anyNonOne || secondHasRef;
 }
 
