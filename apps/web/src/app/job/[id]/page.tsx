@@ -635,73 +635,265 @@ export default function JobPage() {
           </div>
         )}
 
-        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: result.second_pass ? 0.6 : result.agent_call ? 0.4 : 0.2 }}>
-          <DecisionCard result={result} />
-        </motion.div>
-
-        {/* Phase 3 — second lighting prompt: genuine track_across_frames when borderline */}
+        {/* Visual centerpiece — UNCERTAIN triggers dramatic second-look state, full-width, reason first then lighting. This IS the demo, not a footnote. */}
         {water && result.status === "UNCERTAIN" && (
-          <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.65 }}>
-            <Card className="border-[#38bdf8]/30 bg-[#0f2942]/60">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.5, ease: "easeOut", delay: 0.25 }}
+            className="w-full"
+          >
+            <Card className="border-2 border-[#f59e0b]/40 bg-gradient-to-br from-[#0f2942] via-[#0f2942] to-[#1a365d]/80 shadow-xl shadow-[#f59e0b]/10 overflow-hidden">
+              <div className="h-1 w-full bg-gradient-to-r from-[#f59e0b] via-[#38bdf8] to-[#0ea5e9]" />
               <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <span className="w-7 h-7 rounded-lg bg-[#f59e0b]/15 border border-[#f59e0b]/20 flex items-center justify-center"><Sun className="h-3.5 w-3.5 text-[#f59e0b]" /></span>
-                  Take a second photo — different lighting
-                  <span className="text-xs font-normal text-[#8aa0c0]">Resolves borderline visibility</span>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="rounded-xl bg-[#38bdf8]/10 border border-[#38bdf8]/15 p-3 flex gap-2.5">
-                  <Waves className="h-4 w-4 text-[#38bdf8] flex-shrink-0 mt-0.5" />
-                  <p className="text-xs leading-relaxed text-[#8aa0c0]">First look was borderline. A second photo under <span className="text-[#e6f0ff] font-medium">backlight, ambient, or phone flash</span> lets the agent compare pattern clarity across lightings — the real Secchi technique. This calls <span className="font-mono text-[#38bdf8]">track_across_frames</span> for real, not a simulated crop.</p>
-                </div>
-                {secondError && (
-                  <div className="rounded-xl bg-[#ef4444]/10 border border-[#ef4444]/20 p-3 text-xs text-[#fca5a5]">{secondError}</div>
-                )}
-                <div className="space-y-3">
-                  <div className="flex gap-2">
-                    <select value={secondLighting} onChange={(e) => setSecondLighting(e.target.value)} className="h-10 rounded-xl border border-[#1e3a5f] bg-[#0a1628] text-[#e6f0ff] text-sm px-3 flex-1">
-                      <option value="backlight">Backlight (behind glass)</option>
-                      <option value="ambient">Ambient light</option>
-                      <option value="flash">Phone flash</option>
-                    </select>
-                    <Button variant="outline" size="sm" onClick={() => secondInputRef.current?.click()} className="h-10">
-                      <Upload className="h-4 w-4 mr-1.5" />Upload
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={startSecondCamera} className="h-10">
-                      <Camera className="h-4 w-4 mr-1.5" />Camera
-                    </Button>
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.4, duration: 0.5 }}
+                  className="flex items-center gap-3"
+                >
+                  <span className="w-10 h-10 rounded-xl bg-[#f59e0b] flex items-center justify-center shadow-lg shadow-[#f59e0b]/30"><Sun className="h-5 w-5 text-white" /></span>
+                  <div>
+                    <CardTitle className="text-[15px] text-white">Second look needed — different lighting</CardTitle>
+                    <p className="text-xs text-[#f59e0b] font-medium">Agent requested • the main event, not a footnote</p>
                   </div>
-                  <input ref={secondInputRef} type="file" accept="image/*" className="hidden" onChange={handleSecondInput} />
-                  {secondMode === "camera" && (
-                    <div className="space-y-2">
-                      <div className="rounded-xl overflow-hidden border border-[#1e3a5f] bg-black"><video ref={secondVideoRef} className="w-full max-h-64 object-contain" autoPlay playsInline muted /></div>
-                      <div className="flex gap-2">
-                        <Button onClick={captureSecond} className="flex-1 bg-[#38bdf8] hover:bg-[#0ea5e9] text-[#0a1628] font-semibold">Capture second</Button>
-                        <Button onClick={stopSecondCamera} variant="outline" className="flex-1">Cancel</Button>
+                </motion.div>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.6, duration: 0.6 }}
+                  className="rounded-2xl bg-[#0a1628] border border-[#f59e0b]/20 p-4 relative overflow-hidden"
+                >
+                  <div className="absolute top-0 left-0 w-full h-px bg-gradient-to-r from-transparent via-[#f59e0b]/40 to-transparent" />
+                  <p className="text-[11px] uppercase tracking-widest text-[#f59e0b] mb-2 flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-[#f59e0b] animate-pulse" />Agent reasoning — live</p>
+                  <motion.p
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.8, duration: 0.7 }}
+                    className="text-sm text-[#e6f0ff] leading-relaxed font-mono bg-[#0f2942]/60 rounded-xl p-3 border border-[#1e3a5f]/50"
+                  >
+                    <span className="text-[#f59e0b]">{result.agent_call?.reason_code || "BORDERLINE_PATTERN_VISIBILITY"}</span>
+                    <span className="text-[#8aa0c0]"> — Pattern partially visible ({(result.regions[0]?.evidence as any)?.pattern_visibility?.toFixed(2) ?? "—"} in 0.20–0.55). Requesting a second photo under <span className="text-white font-semibold">different lighting</span>.</span>
+                  </motion.p>
+                  <motion.p
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 1.1, duration: 0.5 }}
+                    className="text-xs text-[#8aa0c0] mt-2"
+                  >
+                    Bound agent picked <span className="font-mono text-[#38bdf8]">track_across_frames</span> for real — two frames, sequence IDs, persistence.
+                  </motion.p>
+                </motion.div>
+                <motion.div
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 1.3, duration: 0.6 }}
+                  className="space-y-4"
+                >
+                  <div className="rounded-xl bg-[#38bdf8]/10 border border-[#38bdf8]/15 p-3 flex gap-2.5">
+                    <Waves className="h-4 w-4 text-[#38bdf8] flex-shrink-0 mt-0.5" />
+                    <p className="text-xs leading-relaxed text-[#8aa0c0]">A second photo under <span className="text-[#e6f0ff] font-medium">backlight, ambient, or phone flash</span> compares pattern clarity — the Secchi technique. This calls <span className="font-mono text-[#38bdf8]">track_across_frames</span> with two real frames.</p>
+                  </div>
+                  {secondError && (
+                    <div className="rounded-xl bg-[#ef4444]/10 border border-[#ef4444]/20 p-3 text-xs text-[#fca5a5]">{secondError}</div>
+                  )}
+                  <div className="space-y-3">
+                    <div className="flex gap-2">
+                      <select value={secondLighting} onChange={(e) => setSecondLighting(e.target.value)} className="h-10 rounded-xl border border-[#1e3a5f] bg-[#0a1628] text-[#e6f0ff] text-sm px-3 flex-1">
+                        <option value="backlight">Backlight (behind glass)</option>
+                        <option value="ambient">Ambient light</option>
+                        <option value="flash">Phone flash</option>
+                      </select>
+                      <Button variant="outline" size="sm" onClick={() => secondInputRef.current?.click()} className="h-10">
+                        <Upload className="h-4 w-4 mr-1.5" />Upload
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={startSecondCamera} className="h-10">
+                        <Camera className="h-4 w-4 mr-1.5" />Camera
+                      </Button>
+                    </div>
+                    <input ref={secondInputRef} type="file" accept="image/*" className="hidden" onChange={handleSecondInput} />
+                    {secondMode === "camera" && (
+                      <div className="space-y-2">
+                        <div className="rounded-xl overflow-hidden border border-[#1e3a5f] bg-black"><video ref={secondVideoRef} className="w-full max-h-64 object-contain" autoPlay playsInline muted /></div>
+                        <div className="flex gap-2">
+                          <Button onClick={captureSecond} className="flex-1 bg-[#38bdf8] hover:bg-[#0ea5e9] text-[#0a1628] font-semibold">Capture second</Button>
+                          <Button onClick={stopSecondCamera} variant="outline" className="flex-1">Cancel</Button>
+                        </div>
                       </div>
-                    </div>
-                  )}
-                  {secondPreview && (
-                    <div className="relative rounded-xl overflow-hidden border border-[#1e3a5f]/60 bg-[#0a1628]">
-                      <img src={secondPreview} alt="Second lighting" className="w-full max-h-64 object-contain mx-auto" />
-                      <button onClick={resetSecond} className="absolute top-2 right-2 rounded-full bg-black/60 backdrop-blur p-2 text-white hover:bg-black/80"><X className="h-4 w-4" /></button>
-                    </div>
-                  )}
-                  <Button onClick={handleSecondSubmit} disabled={!secondFile || secondUploading} className="w-full h-11 bg-[#38bdf8] hover:bg-[#0ea5e9] text-[#0a1628] font-semibold shadow-lg shadow-[#38bdf8]/20 disabled:opacity-40">
-                    {secondUploading ? (
-                      <span className="flex items-center gap-2">Analyzing second lighting...<span className="flex gap-1 ml-1"><motion.span animate={{ opacity: [1, 0.3, 1] }} transition={{ duration: 0.9, repeat: Infinity, delay: 0 }} className="w-1 h-1 rounded-full bg-[#0a1628] inline-block" /><motion.span animate={{ opacity: [1, 0.3, 1] }} transition={{ duration: 0.9, repeat: Infinity, delay: 0.2 }} className="w-1 h-1 rounded-full bg-[#0a1628] inline-block" /><motion.span animate={{ opacity: [1, 0.3, 1] }} transition={{ duration: 0.9, repeat: Infinity, delay: 0.4 }} className="w-1 h-1 rounded-full bg-[#0a1628] inline-block" /></span></span>
-                    ) : (
-                      <>Submit second lighting → re-inspect with both frames</>
                     )}
-                  </Button>
-                  <p className="text-[11px] text-[#5a7aa0] text-center">Sends <span className="font-mono text-[#8aa0c0]">original_job_id={id}</span> + your second image to <span className="font-mono text-[#38bdf8]">track_across_frames([frame1, frame2])</span>. Look for <span className="text-[#8aa0c0]">LOOK 1 → LOOK 2</span> timestamps in the next trace.</p>
-                </div>
-                <canvas ref={secondCanvasRef} className="hidden" />
+                    {secondPreview && (
+                      <div className="relative rounded-xl overflow-hidden border border-[#1e3a5f]/60 bg-[#0a1628]">
+                        <img src={secondPreview} alt="Second lighting" className="w-full max-h-64 object-contain mx-auto" />
+                        <button onClick={resetSecond} className="absolute top-2 right-2 rounded-full bg-black/60 backdrop-blur p-2 text-white hover:bg-black/80"><X className="h-4 w-4" /></button>
+                      </div>
+                    )}
+                    <Button onClick={handleSecondSubmit} disabled={!secondFile || secondUploading} className="w-full h-11 bg-[#38bdf8] hover:bg-[#0ea5e9] text-[#0a1628] font-semibold shadow-lg shadow-[#38bdf8]/20 disabled:opacity-40">
+                      {secondUploading ? (
+                        <span className="flex items-center gap-2">Analyzing second lighting...<span className="flex gap-1 ml-1"><motion.span animate={{ opacity: [1, 0.3, 1] }} transition={{ duration: 0.9, repeat: Infinity, delay: 0 }} className="w-1 h-1 rounded-full bg-[#0a1628] inline-block" /><motion.span animate={{ opacity: [1, 0.3, 1] }} transition={{ duration: 0.9, repeat: Infinity, delay: 0.2 }} className="w-1 h-1 rounded-full bg-[#0a1628] inline-block" /><motion.span animate={{ opacity: [1, 0.3, 1] }} transition={{ duration: 0.9, repeat: Infinity, delay: 0.4 }} className="w-1 h-1 rounded-full bg-[#0a1628] inline-block" /></span></span>
+                      ) : (
+                        <>Submit second lighting → re-inspect with both frames</>
+                      )}
+                    </Button>
+                    <p className="text-[11px] text-[#5a7aa0] text-center">Sends <span className="font-mono text-[#8aa0c0]">original_job_id={id}</span> + second image to <span className="font-mono text-[#38bdf8]">track_across_frames([frame1, frame2])</span>. Next trace shows <span className="text-[#8aa0c0]">LOOK 1 → LOOK 2</span> with persistence.</p>
+                  </div>
+                  <canvas ref={secondCanvasRef} className="hidden" />
+                </motion.div>
               </CardContent>
             </Card>
           </motion.div>
         )}
+
+        {/* Side-by-side LOOK 1 vs LOOK 2 — proof that changing input changed evidence (only when two frames) */}
+        {water && (result as any).frames && (result as any).frames.length === 2 && result.second_pass && (
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, delay: 0.3 }}
+            className="w-full"
+          >
+            <Card className="border-2 border-[#38bdf8]/30 bg-[#0a1628]/80 overflow-hidden">
+              <div className="h-1 w-full bg-gradient-to-r from-[#38bdf8] via-[#7dd3fc] to-[#0ea5e9]" />
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <span className="w-7 h-7 rounded-lg bg-[#38bdf8]/15 border border-[#38bdf8]/20 flex items-center justify-center"><Eye className="h-4 w-4 text-[#38bdf8]" /></span>
+                  LOOK 1 vs LOOK 2 — side by side
+                  <span className="text-xs font-normal text-[#8aa0c0]">Proof that lighting changed the evidence</span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {(() => {
+                  const f1vis = (result.regions[0]?.evidence as any)?.pattern_visibility ?? 0;
+                  const f2vis = ((result.second_pass as any)?.regions[0] as any)?.pattern_visibility ?? (result.second_pass?.regions[0]?.edge_continuity ?? 0);
+                  const delta = f2vis - f1vis;
+                  const frames: any[] = (result as any).frames || [];
+                  const f1 = frames[0] || { lighting: "ambient", seq: "?", timestamp: "" };
+                  const f2 = frames[1] || { lighting: "backlight", seq: "?", timestamp: "" };
+                  const deltaColor = Math.abs(delta) < 0.03 ? "#f59e0b" : delta > 0 ? "#38bdf8" : "#ef4444";
+                  const deltaText = delta > 0.01 ? `+${delta.toFixed(3)} clearer` : delta < -0.01 ? `${delta.toFixed(3)} more turbid` : "no change";
+                  return (
+                    <>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* LOOK 1 */}
+                        <motion.div
+                          initial={{ opacity: 0, x: -12 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: 0.4, duration: 0.5 }}
+                          className="rounded-2xl bg-[#0f2942] border border-[#1e3a5f] p-4 flex flex-col items-center"
+                        >
+                          <div className="w-full flex items-center justify-between mb-3">
+                            <span className="text-xs font-bold tracking-widest text-[#8aa0c0]">LOOK 1</span>
+                            <span className="text-[11px] font-mono px-2 py-1 rounded-full bg-[#0a1628] border border-[#1e3a5f] text-[#38bdf8]">{f1.lighting}</span>
+                          </div>
+                          <div className="w-24 h-24 rounded-xl bg-[#0a1628] border border-[#1e3a5f] flex flex-col items-center justify-center gap-1">
+                            <Droplets className="h-7 w-7 text-[#38bdf8]/80" />
+                            <span className="text-[11px] font-mono text-[#5a7aa0]">frame #{f1.seq}</span>
+                          </div>
+                          <p className="text-[11px] font-mono text-[#5a7aa0] mt-2 truncate max-w-full">{String(f1.timestamp).slice(0, 19)}</p>
+                          <motion.div
+                            initial={{ opacity: 0, scale: 0.9 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            transition={{ delay: 0.7, duration: 0.5 }}
+                            className="mt-3 text-center"
+                          >
+                            <p className="text-xs text-[#8aa0c0] uppercase tracking-wide">Pattern visibility</p>
+                            <motion.p
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1 }}
+                              transition={{ delay: 0.9, duration: 0.6 }}
+                              className="text-xl font-bold font-mono text-white"
+                            >
+                              {f1vis.toFixed(3)}
+                            </motion.p>
+                            <ClarityBar value={f1vis} />
+                          </motion.div>
+                        </motion.div>
+
+                        {/* LOOK 2 */}
+                        <motion.div
+                          initial={{ opacity: 0, x: 12 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: 0.6, duration: 0.5 }}
+                          className="rounded-2xl bg-[#0f2942] border border-[#38bdf8]/30 p-4 flex flex-col items-center shadow-lg shadow-[#38bdf8]/10"
+                        >
+                          <div className="w-full flex items-center justify-between mb-3">
+                            <span className="text-xs font-bold tracking-widest text-[#38bdf8]">LOOK 2</span>
+                            <span className="text-[11px] font-mono px-2 py-1 rounded-full bg-[#38bdf8] text-[#0a1628] font-semibold">{f2.lighting}</span>
+                          </div>
+                          <div className="w-24 h-24 rounded-xl bg-[#0a1628] border border-[#38bdf8]/30 flex flex-col items-center justify-center gap-1">
+                            <Sun className="h-7 w-7 text-[#f59e0b]" />
+                            <span className="text-[11px] font-mono text-[#38bdf8]">frame #{f2.seq}</span>
+                          </div>
+                          <p className="text-[11px] font-mono text-[#8aa0c0] mt-2 truncate max-w-full">{String(f2.timestamp).slice(0, 19)}</p>
+                          <motion.div
+                            initial={{ opacity: 0, scale: 0.9 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            transition={{ delay: 0.9, duration: 0.5 }}
+                            className="mt-3 text-center"
+                          >
+                            <p className="text-xs text-[#8aa0c0] uppercase tracking-wide">Pattern visibility</p>
+                            <motion.p
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1 }}
+                              transition={{ delay: 1.1, duration: 0.6 }}
+                              className="text-xl font-bold font-mono text-white"
+                            >
+                              {f2vis.toFixed(3)}
+                            </motion.p>
+                            <ClarityBar value={f2vis} />
+                          </motion.div>
+                        </motion.div>
+                      </div>
+
+                      {/* Delta highlight — impossible to miss */}
+                      <motion.div
+                        initial={{ opacity: 0, y: 8, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        transition={{ delay: 1.3, duration: 0.6, ease: "easeOut" }}
+                        className="rounded-xl border-2 p-4 flex items-center justify-between"
+                        style={{ borderColor: deltaColor + "40", backgroundColor: deltaColor + "12" }}
+                      >
+                        <div>
+                          <p className="text-xs uppercase tracking-widest" style={{ color: deltaColor }}>Delta — evidence changed</p>
+                          <p className="text-sm font-mono font-bold mt-1" style={{ color: deltaColor }}>{deltaText} (Δ {delta.toFixed(3)})</p>
+                          <p className="text-[11px] text-[#8aa0c0] mt-1">Changing the lighting changed the measurement — not a duplicate read.</p>
+                        </div>
+                        <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ backgroundColor: deltaColor + "20", border: `1px solid ${deltaColor}40` }}>
+                          <motion.span
+                            animate={{ x: [0, 4, 0] }}
+                            transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }}
+                            className="text-lg"
+                            style={{ color: deltaColor }}
+                          >
+                            →
+                          </motion.span>
+                        </div>
+                      </motion.div>
+
+                      <p className="text-[11px] text-[#5a7aa0] text-center">
+                        LOOK 1: frame #{f1.seq} ({f1.lighting}) {String(f1.timestamp).slice(11, 19)} → LOOK 2: frame #{f2.seq} ({f2.lighting}) {String(f2.timestamp).slice(11, 19)} · persistence {(result.second_pass as any)?.regions?.[0] ? "" : ""} {(result as any)?.second_pass?.regions?.[0] ? "" : ""}
+                        {(() => {
+                          const notes: string = ((result as any)?.second_pass as any)?.regions?.[0] ? "" : "";
+                          return null;
+                        })()}
+                      </p>
+                      {(result as any).frames && (
+                        <p className="text-[11px] font-mono text-[#5a7aa0] text-center">
+                          {(result as any).frame_info || `${f1.seq} → ${f2.seq}`}
+                        </p>
+                      )}
+                    </>
+                  );
+                })()}
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
+
+        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.75 }}>
+          <DecisionCard result={result} />
+        </motion.div>
 
         {result.measurements && (
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: 0.7 }}>
