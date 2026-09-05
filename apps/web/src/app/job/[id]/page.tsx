@@ -151,6 +151,13 @@ function DecisionCard({ result }: { result: InspectionResult }) {
         ? "Visible turbidity detected — this water should not be consumed without treatment or further testing. Pattern strongly obscured through the sample."
         : "Defect confidently detected.",
     },
+    NO_PATTERN_DETECTED: {
+      bg: "bg-[#64748b]/10",
+      border: "border-[#64748b]/30",
+      text: "text-[#94a3b8]",
+      icon: <Eye className="h-6 w-6 text-[#94a3b8]" />,
+      safety: "No checkerboard pattern detected — ensure the printed grid is visible behind the water sample and retake the photo. No turbidity verdict can be given on this image.",
+    },
   };
   const s = styles[decision] || styles.REVIEW;
   return (
@@ -162,20 +169,23 @@ function DecisionCard({ result }: { result: InspectionResult }) {
             <p className="text-xs uppercase tracking-widest text-[#8aa0c0]">Final Decision</p>
             <p className={`text-2xl font-bold tracking-tight ${s.text}`}>{decision}</p>
           </div>
-          <Badge variant={decision === "PASS" ? "success" : decision === "FAIL" ? "destructive" : "warning"} className="text-sm px-3 py-1">
-            {confidence_band} confidence
+          <Badge variant={decision === "PASS" ? "success" : decision === "FAIL" ? "destructive" : decision === "NO_PATTERN_DETECTED" ? "outline" : "warning"} className="text-sm px-3 py-1">
+            {decision === "NO_PATTERN_DETECTED" ? "no pattern" : `${confidence_band} confidence`}
           </Badge>
         </div>
-        <div className={`mt-4 rounded-xl border p-3 flex gap-2.5 ${decision === "PASS" ? "bg-[#0a1628]/60 border-[#38bdf8]/15" : "bg-[#ef4444]/5 border-[#ef4444]/15"}`}>
-          <ShieldAlert className={`h-4 w-4 flex-shrink-0 mt-0.5 ${decision === "PASS" ? "text-[#38bdf8]" : "text-[#ef4444]"}`} />
-          <p className={`text-xs leading-relaxed ${decision === "PASS" ? "text-[#8aa0c0]" : "text-[#fca5a5]"}`}>{s.safety}</p>
+        <div className={`mt-4 rounded-xl border p-3 flex gap-2.5 ${decision === "PASS" ? "bg-[#0a1628]/60 border-[#38bdf8]/15" : decision === "NO_PATTERN_DETECTED" ? "bg-[#1e293b]/60 border-[#64748b]/20" : "bg-[#ef4444]/5 border-[#ef4444]/15"}`}>
+          <ShieldAlert className={`h-4 w-4 flex-shrink-0 mt-0.5 ${decision === "PASS" ? "text-[#38bdf8]" : decision === "NO_PATTERN_DETECTED" ? "text-[#94a3b8]" : "text-[#ef4444]"}`} />
+          <p className={`text-xs leading-relaxed ${decision === "PASS" ? "text-[#8aa0c0]" : decision === "NO_PATTERN_DETECTED" ? "text-[#cbd5e1]" : "text-[#fca5a5]"}`}>{s.safety}</p>
         </div>
         <div className="mt-3 flex items-center gap-2 text-sm">
           <span className="text-[#8aa0c0]">Human approval required:</span>
-          <span className={`font-medium ${human_approval_required ? "text-[#f59e0b]" : "text-[#38bdf8]"}`}>
-            {human_approval_required ? "Yes — do not drink without treatment" : "No"}
+          <span className={`font-medium ${decision === "NO_PATTERN_DETECTED" ? "text-[#94a3b8]" : human_approval_required ? "text-[#f59e0b]" : "text-[#38bdf8]"}`}>
+            {decision === "NO_PATTERN_DETECTED" ? "Yes — retake with pattern visible" : human_approval_required ? "Yes — do not drink without treatment" : "No"}
           </span>
         </div>
+        {decision === "NO_PATTERN_DETECTED" && (
+          <p className="text-[11px] text-[#64748b] mt-2">This is not a turbidity reading. The system could not find the reference pattern, so it cannot score clarity.</p>
+        )}
       </CardContent>
     </Card>
   );

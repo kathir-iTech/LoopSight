@@ -44,6 +44,8 @@ input-hardening, experiments) runs on synthetic fixtures and needs no network, n
 Gemini key. `scripts/_verify_end_to_end.py` and `tests/test_e2e_local.py` exercise the real stack
 end-to-end; `scripts/run_experiments.py` runs the Experiment A/B/B2/C harness.
 
+> Repro note (strict): use `npm ci` (not `npm install`) in `apps/web` to test lockfile consistency — `npm install` can silently hide drift, `npm ci` fails on it. CI (` .github/workflows/test.yml:56`) uses `npm ci`.
+
 ## Water checklist — printable pattern
 
 Print a high-contrast checkerboard or grid on any A4 sheet (black/white). Place it behind or under a clear glass/cup, photograph it with and without water. The web UI's instructions show this; the same pattern is what `measure_pattern_visibility` detects via `cv2.findChessboardCorners` or contour square counting, then measures contrast attenuation and edge sharpness through the water.

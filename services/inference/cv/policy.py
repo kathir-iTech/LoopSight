@@ -30,6 +30,24 @@ def decide(
 ) -> FinalDecision:
     profile = PROFILES[profile_name]
 
+    # Responsible-AI guard: if no reference pattern was detected at all, do not
+    # return a confident turbidity verdict on invalid input. This prevents a
+    # non-water photo (wall, person, random object) from being scored as PASS/FAIL/REVIEW
+    # when the checkerboard was never visible. See Part 3.3 audit.
+    if profile_name == "water_turbidity_v1":
+        first_has_pattern = any(getattr(r, "pattern_found", False) for r in first_pass.regions) if first_pass.regions else False
+        second_has_pattern = bool(getattr(second_pass_region, "pattern_found", False)) if second_pass_region is not None else False
+        # Evidence gap explicitly says pattern not detected, or no region found it, and second look also didn't find it
+        pattern_missing_first = (not first_has_pattern) or any("pattern not detected" in g.lower() for g in first_pass.evidence_gap)
+        if pattern_missing_first and not second_has_pattern:
+            return FinalDecision(
+                decision="NO_PATTERN_DETECTED",
+                confidence_band="low",
+                evidence_changed=second_pass_region is not None,
+                human_approval_required=True,
+                reasoning=["reference pattern not detected — ensure the printed checkerboard/grid is visible behind the water sample; no turbidity verdict possible on invalid input"],
+            )
+
     if first_pass.status == "CONFIDENT_PASS":
         return FinalDecision(
             decision="PASS",

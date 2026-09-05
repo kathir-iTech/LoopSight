@@ -35,7 +35,7 @@ export interface SecondPass {
 }
 
 export interface FinalDecision {
-  decision: "PASS" | "REVIEW" | "FAIL";
+  decision: "PASS" | "REVIEW" | "FAIL" | "NO_PATTERN_DETECTED";
   confidence_band: string;
   human_approval_required: boolean;
 }

@@ -278,11 +278,11 @@ curl -X POST -F "image=@print.jpg" -F "reference_image=@reference.jpg" http://lo
 
 # Web (in a second terminal)
 cd apps/web
-npm install
+npm ci         # strict — fails if package-lock.json drifted; npm install would hide it
 npm run build  # must compile clean
 npm run dev    # http://localhost:3000
 # Set INFERENCE_API_URL in .env.local if inference is not on localhost:8000
-# Optionally: GEMINI_API_KEY, DEMO_MODE=golden, FORCE_AMBIGUOUS=1
+# Optionally: GEMINI_API_KEY, DEMO_MODE=golden, FORCE_AMBIGUOUS=1, GEMINI_MODEL, GEMINI_TIMEOUT_SECONDS
 ```
 
 ### 8.3 Environment Variables
