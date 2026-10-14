@@ -1,18 +1,11 @@
 """
-LoopSight — bounded agent tool selection.
+LoopSight v2 — bounded agent tool selection & MCP tool schema definitions.
 
-Update 2026-09-01 (verified live): call_gemini() HAS been executed against
-a real Gemini API key (GEMINI_API_KEY=AQ.Ab8... free tier, no card) and a
-real low-contrast synthetic FirstPassResult. The spec's default
-'gemini-3.7-flash' returns 503 UNAVAILABLE; the working model is
-'gemini-3.6-flash' (API's own recommendation as successor to 2.5-flash) and
-'gemini-3-flash-preview' both verified to return a valid whitelisted
-ToolCall (see tests/test_gemini_integration.py live run). This module now
-defaults to gemini-3.6-flash with automatic fallback to the preview model.
-
-What remains tested without a key: whitelist enforcement, reason_code
-validation, and mock mode (the recommended path for routine CI per spec
-Section 27 — only hit the live model when specifically testing integration).
+Enforces double-layer whitelist validation, passes full multi-domain OpenCV 5
+telemetry (pattern_visibility, glare_ratio, skew_deg, stratification_delta,
+crack_width_mm, crack_severity_score, edge_continuity, local_contrast) into
+the Gemini prompt, and provides MCP-compatible tool descriptors for the
+OpenCV AI Competition 2026 Agentic Vision & MCP track.
 """
 
 from __future__ import annotations
@@ -25,6 +18,64 @@ from cv.first_pass import FirstPassResult, ALL_TOOLS
 
 ALLOWED_TOOLS = set(ALL_TOOLS)
 
+MCP_TOOL_DESCRIPTORS = [
+    {
+        "name": "inpaint_specular_glare",
+        "description": "Masks high-luminance low-saturation HSV specular glass reflections, runs Navier-Stokes/Telea inpainting (cv2.inpaint) + CLAHE contrast recovery, and re-measures pattern visibility.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"radius": {"type": "number", "default": 5.0}},
+        },
+    },
+    {
+        "name": "rectify_perspective_homography",
+        "description": "Detects perspective-skewed calibration target corners, computes a planar homography (cv2.getPerspectiveTransform + cv2.warpPerspective), and re-measures fronto-parallel visibility.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "analyze_vertical_stratification",
+        "description": "Splits liquid column into 3 horizontal strata (top supernatant, middle suspension, bottom sediment layer) to isolate settled turbidity from clear upper water.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "skeletonize_crack_metrology",
+        "description": "Removes low-frequency shadow gradients via homomorphic Gaussian division and measures sub-millimeter fracture width via Euclidean distance transform (cv2.distanceTransform).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"mm_per_px": {"type": "number", "default": 0.10}},
+        },
+    },
+    {
+        "name": "track_across_frames",
+        "description": "Compares multi-lighting (ambient vs backlight/flash) or temporal frames, computing persistence_std and sub-pixel cv2.phaseCorrelate registration shift.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "reinspect_roi",
+        "description": "Upsamples the ROI via 2x bicubic interpolation (cv2.INTER_CUBIC) to resolve borderline high-frequency pattern or edge detail.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"scale": {"type": "number", "default": 2.0}},
+        },
+    },
+    {
+        "name": "measure_edge_continuity",
+        "description": "Re-evaluates Canny edge continuity at sensitive thresholds (low=30, high=100) when default thresholds miss subtle boundaries.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "low": {"type": "integer", "default": 30},
+                "high": {"type": "integer", "default": 100},
+            },
+        },
+    },
+    {
+        "name": "compare_to_reference",
+        "description": "Runs histogram-equalized absdiff comparison against a known-good reference image.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+]
+
 
 @dataclass
 class ToolCall:
@@ -35,16 +86,12 @@ class ToolCall:
 
 class InvalidToolCallError(Exception):
     """Raised when the agent (or a mock/fixture standing in for it) returns
-    something outside the whitelist or malformed. Callers should catch this
-    and fall back to a deterministic default tool, never crash the pipeline
-    on it — see spec Section 20's risk register."""
+    something outside the whitelist or malformed."""
 
 
 def validate_tool_call(raw: dict) -> ToolCall:
     """Enforce the whitelist a SECOND time here, independent of whatever
-    schema validation happened upstream — spec Section 12's data-contract
-    principle: never trust a single validation layer for something that
-    gates an actual action."""
+    schema validation happened upstream."""
     if not isinstance(raw, dict):
         raise InvalidToolCallError(f"tool call must be a dict, got {type(raw)}")
     tool = raw.get("tool")
@@ -61,44 +108,44 @@ def validate_tool_call(raw: dict) -> ToolCall:
 
 def _build_prompt(first_pass: FirstPassResult) -> str:
     evidence_gap = first_pass.evidence_gap
+    candidate_tools = sorted(set(first_pass.allowed_tools) & ALLOWED_TOOLS) if first_pass.allowed_tools else sorted(ALLOWED_TOOLS)
     region_summaries = [
-        {"edge_continuity": r.edge_continuity, "reference_similarity": r.reference_similarity, "local_contrast": r.local_contrast}
+        {
+            "edge_continuity": round(float(r.edge_continuity), 4),
+            "reference_similarity": round(float(r.reference_similarity), 4),
+            "local_contrast": round(float(r.local_contrast), 4),
+            "pattern_visibility": round(float(getattr(r, "pattern_visibility", 0.0)), 4),
+            "pattern_sharpness": round(float(getattr(r, "pattern_sharpness", 0.0)), 4),
+            "pattern_found": bool(getattr(r, "pattern_found", False)),
+            "glare_ratio": round(float(getattr(r, "glare_ratio", 0.0)), 4),
+            "skew_deg": round(float(getattr(r, "skew_deg", 0.0)), 2),
+            "stratification_delta": round(float(getattr(r, "stratification_delta", 0.0)), 4),
+            "crack_width_mm": round(float(getattr(r, "crack_width_mm", 0.0)), 3),
+            "crack_severity_score": round(float(getattr(r, "crack_severity_score", 0.0)), 4),
+        }
         for r in first_pass.regions
     ]
     return (
-        "Given this inspection evidence gap, choose exactly one tool from "
-        f"{sorted(ALLOWED_TOOLS)} to resolve the ambiguity. Respond as JSON: "
+        "You are the bounded active-perception controller for LoopSight (OpenCV 5). "
+        "Given this first-pass evidence gap and region telemetry, choose exactly one OpenCV tool from "
+        f"{candidate_tools} to resolve the visual ambiguity. Respond strictly as JSON: "
         '{"tool": "...", "arguments": {...}, "reason_code": "..."}. '
-        f"Evidence gap: {evidence_gap}. Region measurements: {region_summaries}."
+        f"Evidence gap: {evidence_gap}. Region telemetry: {region_summaries}."
     )
 
 
 def call_gemini(first_pass: FirstPassResult, api_key: str, model: str = "gemini-3.6-flash") -> ToolCall:
-    """Live Gemini call — verified 2026-09-01 against a real API key (free tier, no card).
-    Default model updated from the spec's fictional 'gemini-3.7-flash' (which returns
-    503 UNAVAILABLE) to 'gemini-3.6-flash', the model the API itself recommends as
-    the successor to 'gemini-2.5-flash' (see 404 message: 'use models/gemini-3.6-flash').
-    Also verified as working: 'gemini-3-flash-preview'. If the primary model returns
-    404/503, we automatically fall back to the preview model before surfacing an error,
-    so a future rename doesn't silently break the demo pipeline."""
+    """Live Gemini call bounded by GEMINI_TIMEOUT_SECONDS with model fallback."""
     from google import genai  # deferred import
 
-    # Bound the network call so an unreachable/slow Gemini endpoint can never
-    # hang the request or the test suite indefinitely. Each candidate model
-    # gets up to GEMINI_TIMEOUT_SECONDS (default 15) before it's treated as a
-    # timeout. 429s/timeouts are the norm on a free-tier key under concurrent
-    # judge traffic — spec Section 20's risk register requires they fail fast
-    # and fall back, not block.
     timeout_sec = float(os.environ.get("GEMINI_TIMEOUT_SECONDS", "15").strip() or 15)
     client = genai.Client(
         api_key=api_key,
         http_options={"timeout": timeout_sec},
     )
     prompt = _build_prompt(first_pass)
-    # Try primary, then fallback candidates if the model name is stale.
     candidates = [model]
-    # Build fallback list without duplicates, preserving order
-    for fallback in ["gemini-3.6-flash", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview"]:
+    for fallback in ["gemini-3.6-flash", "gemini-3-flash-preview", "gemini-2.5-flash", "gemini-3.1-flash-lite-preview"]:
         if fallback not in candidates:
             candidates.append(fallback)
 
@@ -113,25 +160,18 @@ def call_gemini(first_pass: FirstPassResult, api_key: str, model: str = "gemini-
             raw = json.loads(response.text)
             return validate_tool_call(raw)
         except Exception as exc:  # noqa: BLE001
-            # Only retry on model-not-found / unavailable; other errors (auth, validation) should surface
             msg = str(exc)
             if "NOT_FOUND" in msg or "UNAVAILABLE" in msg or "404" in msg or "503" in msg:
                 last_exc = exc
                 continue
             raise
-    # All candidates exhausted
     if last_exc is not None:
         raise last_exc
     raise RuntimeError("call_gemini: no model candidates tried")
 
 
 def select_tool_mock(first_pass: FirstPassResult, fixture: dict) -> ToolCall:
-    """Test/dev path — replays a recorded or hand-written response instead
-    of calling the live API. This is the path exercised by this repo's
-    test suite right now, and it's also the recommended pattern for
-    routine CI runs per spec Section 27 (avoid burning API quota on every
-    test run; only hit the live model when specifically testing that
-    integration)."""
+    """Deterministic offline/CI tool selection path validated through the same whitelist."""
     return validate_tool_call(fixture)
 
 
@@ -142,11 +182,7 @@ def select_tool(
     mock_fixture: dict | None = None,
     default_tool: str = "reinspect_roi",
 ) -> ToolCall:
-    """Top-level entry point with a deterministic fallback baked in.
-    Per spec Section 20's risk register: a malformed or failed agent
-    response should never crash the pipeline — it should fall back to a
-    sane deterministic default, logged as a fallback, not silently
-    swallowed."""
+    """Top-level entry point with deterministic fallback."""
     try:
         if mock_fixture is not None:
             return select_tool_mock(first_pass, mock_fixture)
@@ -160,12 +196,6 @@ def select_tool(
             reason_code="FALLBACK_AFTER_INVALID_AGENT_RESPONSE",
         )
     except Exception as exc:
-        # Deliberately broad: a real deployment WILL see 429s, timeouts,
-        # and transient network errors under concurrent judge/tester
-        # traffic on a free-tier API key — none of those are
-        # InvalidToolCallError, and none of them should crash the request.
-        # Same fallback contract either way; the reason_code says which
-        # kind of failure it was, for the CloudWatch logs to distinguish.
         return ToolCall(
             tool=default_tool,
             arguments={},

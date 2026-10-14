@@ -174,4 +174,5 @@ if __name__ == "__main__":
             import traceback; traceback.print_exc()
             failed += 1
     print(f"--- {passed} passed, {failed} failed out of {len(TESTS)} ---")
+    client.__exit__(None, None, None)
     sys.exit(1 if failed else 0)

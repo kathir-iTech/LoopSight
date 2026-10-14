@@ -148,7 +148,8 @@ def calibrate(dataset_root: Path, reference_path: Optional[Path] = None) -> Dict
     raw: Dict[str, Dict[str, List[float]]] = {}
 
     # Discover labels = immediate subdirectories that contain at least one image-like file
-    subdirs = [p for p in dataset_root.iterdir() if p.is_dir()]
+    extra_labels = ["clean", "broken", "borderline", "low_contrast", "clear", "turbid", "clear_glare", "clear_dim_backlit", "turbid_stratified", "intact", "cracked", "crack_shadow"]
+    subdirs = sorted({p for p in dataset_root.iterdir() if p.is_dir()} | {dataset_root / k for k in extra_labels if (dataset_root / k).is_dir()})
     if not subdirs:
         raise ValueError(f"no subfolders found in {dataset_root} — expected e.g. clean/, layer_shift/, ...")
 

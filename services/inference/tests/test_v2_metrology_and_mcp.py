@@ -1,0 +1,145 @@
+"""
+LoopSight v2 — comprehensive unit & integration tests for the upgraded OpenCV 5
+spatial metrology tools, multi-profile active-perception loop, MCP endpoints,
+benchmark sample runner, and SQLite write-through persistence.
+"""
+
+import os
+import sys
+import tempfile
+
+os.environ["GEMINI_API_KEY"] = ""
+os.environ["DEMO_MODE"] = ""
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from fastapi.testclient import TestClient
+from main import app, SAMPLE_CATALOG
+from cv.first_pass import run_first_pass
+from cv.tools import (
+    inpaint_specular_glare,
+    rectify_perspective_homography,
+    analyze_vertical_stratification,
+    skeletonize_crack_metrology,
+)
+from cv.policy import decide
+from storage import InMemoryJobStore
+from tests.synthetic import (
+    make_glare_confounded_water,
+    make_stratified_turbid_water,
+    make_intact_concrete,
+    make_structural_crack,
+    make_shadow_confounded_concrete,
+    make_checkerboard,
+)
+
+client = TestClient(app)
+ROI = (0, 0, 200, 200)
+
+
+def test_glare_confounder_triggers_uncertain_and_inpaint_resolves_pass():
+    img = make_glare_confounded_water()
+    fp = run_first_pass(img, None, [ROI], profile_name="water_turbidity_v1")
+    assert fp.status == "UNCERTAIN", f"expected UNCERTAIN on glare confounder, got {fp.status}"
+    assert "inpaint_specular_glare" in fp.allowed_tools
+    tool_res = inpaint_specular_glare(img, ROI)
+    final = decide(fp, tool_res.region, profile_name="water_turbidity_v1")
+    print(f"  glare confounder: pass1_pv={fp.regions[0].pattern_visibility:.3f} -> inpaint_pv={tool_res.region.pattern_visibility:.3f} -> {final.decision}")
+    assert final.decision == "PASS"
+
+
+def test_vertical_stratification_triggers_uncertain_and_resolves_fail():
+    img = make_stratified_turbid_water()
+    fp = run_first_pass(img, None, [ROI], profile_name="water_turbidity_v1")
+    assert fp.status == "UNCERTAIN", f"expected UNCERTAIN on stratified water, got {fp.status}"
+    assert "analyze_vertical_stratification" in fp.allowed_tools
+    tool_res = analyze_vertical_stratification(img, ROI)
+    final = decide(fp, tool_res.region, profile_name="water_turbidity_v1")
+    print(f"  stratification: pass1_pv={fp.regions[0].pattern_visibility:.3f} (delta={fp.regions[0].stratification_delta:.3f}) -> strat_pv={tool_res.region.pattern_visibility:.3f} -> {final.decision}")
+    assert final.decision == "FAIL"
+
+
+def test_rectify_perspective_homography_runs_cleanly():
+    img = make_checkerboard()
+    res = rectify_perspective_homography(img, ROI)
+    assert res.tool == "rectify_perspective_homography"
+    assert res.region.pattern_visibility > 0.50
+
+
+def test_structural_crack_metrology_profile_separates_intact_crack_and_confounder():
+    intact = run_first_pass(make_intact_concrete(), None, [ROI], profile_name="structural_crack_metrology_v1")
+    assert intact.status == "CONFIDENT_PASS", f"expected CONFIDENT_PASS for intact concrete, got {intact.status}"
+
+    cracked = run_first_pass(make_structural_crack(thickness_px=6), None, [ROI], profile_name="structural_crack_metrology_v1")
+    assert cracked.status == "CONFIDENT_FAIL", f"expected CONFIDENT_FAIL for 0.6mm crack, got {cracked.status}"
+    assert cracked.regions[0].crack_width_mm >= 0.40
+
+    confounded = run_first_pass(make_shadow_confounded_concrete(), None, [ROI], profile_name="structural_crack_metrology_v1")
+    assert confounded.status == "UNCERTAIN"
+    skel_res = skeletonize_crack_metrology(make_shadow_confounded_concrete(), ROI)
+    final = decide(confounded, skel_res.region, profile_name="structural_crack_metrology_v1")
+    print(f"  crack metrology: intact={intact.status}, cracked_mm={cracked.regions[0].crack_width_mm:.3f}, confounded->{final.decision}")
+    assert final.decision == "PASS"
+
+
+def test_mcp_tools_and_benchmark_samples_endpoints():
+    with client:
+        mcp_resp = client.get("/mcp/tools")
+        assert mcp_resp.status_code == 200
+        mcp_body = mcp_resp.json()
+        assert mcp_body["protocol"] == "mcp/1.0"
+        assert len(mcp_body["tools"]) == 8
+
+        samples_resp = client.get("/samples")
+        assert samples_resp.status_code == 200
+        samples = samples_resp.json()["samples"]
+        assert len(samples) == len(SAMPLE_CATALOG)
+
+        for item in samples:
+            sid = item["id"]
+            run_resp = client.post(f"/inspect/sample/{sid}")
+            assert run_resp.status_code == 200, f"sample {sid} failed: {run_resp.text}"
+            jid = run_resp.json()["job_id"]
+            job_resp = client.get(f"/jobs/{jid}")
+            assert job_resp.status_code == 200
+            job_data = job_resp.json()
+            assert job_data.get("overlay_data_url", "").startswith("data:image/png;base64,")
+            print(f"  sample {sid:26s} -> status={job_data['status']:14s} tool={job_data.get('agent_call', {}).get('tool')} decision={job_data['final_decision']['decision']}")
+
+
+def test_sqlite_write_through_persistence():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        db_file = os.path.join(tmp, "test_jobs.sqlite3")
+        store1 = InMemoryJobStore(backing={}, sqlite_path=db_file)
+        store1.save("job123", {"status": "CONFIDENT_PASS", "final_decision": {"decision": "PASS"}})
+        # Simulate new worker process with empty RAM dict reading from same SQLite file
+        store2 = InMemoryJobStore(backing={}, sqlite_path=db_file)
+        loaded = store2.get("job123")
+        assert loaded is not None
+        assert loaded["final_decision"]["decision"] == "PASS"
+
+
+TESTS = [
+    test_glare_confounder_triggers_uncertain_and_inpaint_resolves_pass,
+    test_vertical_stratification_triggers_uncertain_and_resolves_fail,
+    test_rectify_perspective_homography_runs_cleanly,
+    test_structural_crack_metrology_profile_separates_intact_crack_and_confounder,
+    test_mcp_tools_and_benchmark_samples_endpoints,
+    test_sqlite_write_through_persistence,
+]
+
+if __name__ == "__main__":
+    passed, failed = 0, 0
+    for t in TESTS:
+        try:
+            print(f"RUN  {t.__name__}")
+            t()
+            print(f"PASS {t.__name__}\n")
+            passed += 1
+        except Exception as e:
+            print(f"FAIL {t.__name__}: {e}\n")
+            import traceback
+            traceback.print_exc()
+            failed += 1
+    print(f"--- {passed} passed, {failed} failed out of {len(TESTS)} ---")
+    sys.exit(1 if failed else 0)
