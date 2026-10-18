@@ -26,8 +26,10 @@ function loadTs(file) {
 const { POST } = loadTs(path.join(source, "app/api/inspect/route.ts"));
 const { GET } = loadTs(path.join(source, "app/api/jobs/[id]/route.ts"));
 const { GET: GET_CAPTURE } = loadTs(path.join(source, "app/api/jobs/[id]/captures/[index]/route.ts"));
+const { GET: GET_EVIDENCE } = loadTs(path.join(source, "app/api/jobs/[id]/evidence/route.ts"));
+const { GET: GET_READY } = loadTs(path.join(source, "app/api/readiness/route.ts"));
 const savedFetch = global.fetch;
-const variables = ["VERCEL", "INFERENCE_API_URL", "DEMO_MODE", "DEMO_CASE", "FAIL_CLOSED_PROD"];
+const variables = ["VERCEL", "INFERENCE_API_URL", "INFERENCE_API_TOKEN", "DEMO_MODE", "DEMO_CASE", "FAIL_CLOSED_PROD"];
 let savedEnv;
 test.beforeEach(() => {
   savedEnv = Object.fromEntries(variables.map((key) => [key, process.env[key]]));
@@ -157,4 +159,61 @@ test("expired capture errors are preserved instead of replaced by sample images"
   });
   assert.equal(response.status, 410);
   assert.equal((await response.json()).detail, "capture expired");
+});
+
+test("backend token is attached server-side without entering the result", async () => {
+  process.env.INFERENCE_API_URL = "http://backend.test";
+  process.env.INFERENCE_API_TOKEN = "test-only-server-token";
+  global.fetch = async (_url, options) => {
+    assert.equal(options.headers.get("Authorization"), "Bearer test-only-server-token");
+    return Response.json({ job_id: "real-job" });
+  };
+  const response = await inspection();
+  assert.deepEqual(await response.json(), { job_id: "real-job" });
+});
+
+test("evidence proxy preserves archive bytes, filename and private caching", async () => {
+  process.env.INFERENCE_API_URL = "http://backend.test";
+  const bytes = Uint8Array.from([80, 75, 3, 4]);
+  global.fetch = async url => {
+    assert.equal(url, "http://backend.test/jobs/evidence-job/evidence");
+    return new Response(bytes, { headers: { "Content-Type": "application/zip" } });
+  };
+  const response = await GET_EVIDENCE(new Request("http://example.test"), { params: Promise.resolve({ id: "evidence-job" }) });
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), bytes);
+  assert.equal(response.headers.get("cache-control"), "private, no-store");
+  assert.match(response.headers.get("content-disposition"), /attachment/);
+});
+
+test("readiness requires actual version and successful storage reads", async () => {
+  process.env.INFERENCE_API_URL = "http://backend.test";
+  global.fetch = async url => url.endsWith("/version")
+    ? Response.json({ opencv_version: "5.0.0", storage: { shared_across_instances: true }, measurement_contract: { physical_units_available: false } })
+    : Response.json({ status: "ready" });
+  const response = await GET_READY();
+  const result = await response.json();
+  assert.equal(result.available, true);
+  assert.equal(result.shared_storage, true);
+  assert.equal(result.storage_write_verified, false);
+  global.fetch = async () => Response.json({ detail: "storage down" }, { status: 503 });
+  assert.equal((await GET_READY()).status, 503);
+});
+
+test("combined upload budget is checked before forwarding files", async () => {
+  let called = false;
+  global.fetch = async () => { called = true; return Response.json({}); };
+  const form = new FormData();
+  form.set("image", new File([new Uint8Array(2_000_000)], "one.png"));
+  form.set("reference_image", new File([new Uint8Array(2_000_000)], "two.png"));
+  const response = await POST(new Request("http://example.test/api/inspect", { method: "POST", body: form }));
+  assert.equal(response.status, 413);
+  assert.equal(called, false);
+});
+
+test("expired evidence does not become a successful archive", async () => {
+  process.env.INFERENCE_API_URL = "http://backend.test";
+  global.fetch = async () => Response.json({ detail: "evidence expired" }, { status: 410 });
+  const response = await GET_EVIDENCE(new Request("http://example.test"), { params: Promise.resolve({ id: "old-job" }) });
+  assert.equal(response.status, 410);
+  assert.equal((await response.json()).detail, "evidence expired");
 });

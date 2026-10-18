@@ -4,11 +4,19 @@ import { proxyInference } from "@/lib/inference";
 import { MEASUREMENT_CONTRACT } from "@/lib/measurements";
 
 export async function POST(request: NextRequest) {
+  if (Number(request.headers.get("content-length")) > 4_000_000) {
+    return NextResponse.json({ detail: "Upload too large. Keep the image and optional reference below 4 MB combined." }, { status: 413 });
+  }
   let formData: FormData;
   try {
     formData = await request.formData();
   } catch {
     return NextResponse.json({ detail: "Expected multipart form data." }, { status: 400 });
+  }
+  let totalBytes = 0;
+  for (const value of formData.values()) totalBytes += typeof value === "string" ? new TextEncoder().encode(value).length : value.size;
+  if (totalBytes > 3_900_000) {
+    return NextResponse.json({ detail: "Upload too large. Use a smaller photo or omit the optional reference." }, { status: 413 });
   }
   const sampleId = formData.get("sample_id")?.toString()?.trim();
 

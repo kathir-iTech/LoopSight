@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 /** Forward real results and errors. A transport failure never produces a verdict. */
-export async function proxyInference(path: string, init: RequestInit = {}, responseKind: "json" | "image" = "json") {
+export async function proxyInference(path: string, init: RequestInit = {}, responseKind: "json" | "image" | "archive" = "json") {
   const configuredUrl = process.env.INFERENCE_API_URL?.trim();
   if (!configuredUrl && process.env.VERCEL === "1") {
     return NextResponse.json(
@@ -13,14 +13,18 @@ export async function proxyInference(path: string, init: RequestInit = {}, respo
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20_000);
   try {
-    const response = await fetch(`${target}${path}`, { ...init, signal: controller.signal });
-    if (responseKind === "image" && response.ok) {
-      if (!response.headers.get("content-type")?.startsWith("image/png")) {
+    const headers = new Headers(init.headers);
+    if (process.env.INFERENCE_API_TOKEN) headers.set("Authorization", `Bearer ${process.env.INFERENCE_API_TOKEN}`);
+    const response = await fetch(`${target}${path}`, { ...init, headers, signal: controller.signal });
+    if (responseKind !== "json" && response.ok) {
+      const contentType = responseKind === "image" ? "image/png" : "application/zip";
+      if (!response.headers.get("content-type")?.startsWith(contentType)) {
         return NextResponse.json({ detail: "The backend returned an invalid capture response." }, { status: 502 });
       }
       return new Response(await response.arrayBuffer(), {
         status: response.status,
-        headers: { "Content-Type": "image/png", "Cache-Control": "private, no-store" },
+        headers: { "Content-Type": contentType, "Cache-Control": "private, no-store",
+          ...(responseKind === "archive" ? { "Content-Disposition": 'attachment; filename="loopsight-evidence.zip"' } : {}) },
       });
     }
     const body: unknown = await response.json();

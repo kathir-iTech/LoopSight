@@ -209,6 +209,12 @@ export default function JobPage() {
 
   useEffect(() => {
     setLoading(true);
+    setPollElapsed(0);
+    setSecondFile(null);
+    setSecondPreview(previous => { if (previous?.startsWith("blob:")) URL.revokeObjectURL(previous); return null; });
+    setSecondUploading(false);
+    setSecondError(null);
+    setActiveOverlayLayer("overlay");
     setCaptureUnavailable(false);
     setError(null);
     setResult(null);
@@ -285,6 +291,20 @@ export default function JobPage() {
       if (elapsedTimer) clearInterval(elapsedTimer);
       if (timeoutTimer) clearTimeout(timeoutTimer);
     };
+  }, [id]);
+
+  const downloadEvidence = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/jobs/${encodeURIComponent(id)}/evidence`, { cache: "no-store" });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.detail || "Evidence could not be downloaded.");
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url; link.download = `loopsight-${id}-evidence.zip`; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Evidence download failed."); }
   }, [id]);
 
   const copyTrace = useCallback(async () => {
@@ -375,6 +395,7 @@ export default function JobPage() {
   }, [result, id]);
 
   const handleSecondFileSelect = useCallback((file: File) => {
+    if (file.size > 3_500_000) { setSecondError("Image exceeds 3.5 MB. Please use a smaller photo."); return; }
     setSecondFile(file);
     const url = URL.createObjectURL(file);
     setSecondPreview((prev) => {
@@ -620,12 +641,16 @@ export default function JobPage() {
               </span>
             </div>
             <p className="text-[11px] text-[#8aa0c0] hidden sm:block">
-              {water ? "Optical Nephelometry Physical Metrology" : crack ? "Structural Crack Distance Transform Metrology" : "Surface QC"}
+              {water ? "Relative image-space water screening" : crack ? "Experimental crack-like feature screening" : "Surface QC"}
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" onClick={downloadEvidence} disabled={!result.capture_session?.evidence_available}
+            className="border-[#163256] bg-[#0b192e] text-white text-xs h-8">
+            <Download className="h-3.5 w-3.5 mr-1" /> Evidence ZIP
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -1128,7 +1153,7 @@ export default function JobPage() {
                   <div className="rounded-xl bg-[#22c55e]/10 border border-[#22c55e]/30 p-3.5 space-y-2.5 text-xs font-mono">
                     <div className="flex items-center justify-between">
                       <span className="text-[#38bdf8] font-bold text-[11px] uppercase tracking-wide">
-                        Active Perception Multi-Frame Fusion
+                        Validated changed-lighting capture
                       </span>
                       <span className="text-[#22c55e] font-bold bg-[#22c55e]/20 px-2 py-0.5 rounded text-[10px]">
                         RESOLVED {result.final_decision.decision}
@@ -1231,7 +1256,7 @@ export default function JobPage() {
                     <option value="flash">Flashlight / Torch</option>
                   </select>
 
-                  <input ref={secondInputRef} type="file" accept="image/*" className="hidden" onChange={handleSecondInput} />
+                  <input ref={secondInputRef} data-testid="second-image-input" type="file" accept="image/*" className="hidden" onChange={handleSecondInput} />
                   <Button
                     size="sm"
                     variant="outline"
@@ -1300,7 +1325,7 @@ export default function JobPage() {
                   disabled={!secondFile || secondUploading}
                   className="w-full h-10 bg-[#38bdf8] hover:bg-[#0ea5e9] text-[#070d18] font-bold text-xs shadow-md shadow-[#38bdf8]/20 disabled:opacity-40"
                 >
-                  {secondUploading ? "Analyzing both frames..." : "Re-inspect with Multi-Frame Fusion"}
+                  {secondUploading ? "Analyzing both frames..." : "Analyze new capture"}
                 </Button>
               </div>
             )}
