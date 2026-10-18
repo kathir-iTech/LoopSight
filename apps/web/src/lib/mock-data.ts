@@ -62,6 +62,7 @@ const GOLDEN_RESULTS: Record<string, InspectionResult> = {
         "second-pass pattern visibility 0.89 resolved toward clear water (no visible turbidity)",
       ],
     },
+    overlay_data_url: "/samples/overlays/water_glare_confounded_overlay.png",
     measurements: {
       decode_ms: 0.8,
       first_pass_ms: 4.2,
@@ -122,6 +123,7 @@ const GOLDEN_RESULTS: Record<string, InspectionResult> = {
         "second-pass pattern visibility 0.04 resolved toward turbid water (visible turbidity)",
       ],
     },
+    overlay_data_url: "/samples/overlays/water_stratified_sediment_overlay.png",
     measurements: {
       decode_ms: 0.7,
       first_pass_ms: 4.1,
@@ -186,6 +188,7 @@ const GOLDEN_RESULTS: Record<string, InspectionResult> = {
         "second-pass pattern visibility 0.79 resolved toward clear water (no visible turbidity)",
       ],
     },
+    overlay_data_url: "/samples/overlays/water_dual_lighting_overlay.png",
     measurements: {
       decode_ms: 0.9,
       first_pass_ms: 4.5,
@@ -225,6 +228,7 @@ const GOLDEN_RESULTS: Record<string, InspectionResult> = {
       human_approval_required: true,
       reasoning: ["first pass confidently detected a defect/contamination signal"],
     },
+    overlay_data_url: "/samples/overlays/water_turbid_fail_overlay.png",
     measurements: {
       decode_ms: 0.7,
       first_pass_ms: 3.8,
@@ -282,6 +286,7 @@ const GOLDEN_RESULTS: Record<string, InspectionResult> = {
         "second-pass illumination-normalized metrology cleared shadow/surface artifact (width=0.00mm, severity=0.00)",
       ],
     },
+    overlay_data_url: "/samples/overlays/crack_shadow_confounded_overlay.png",
     measurements: {
       decode_ms: 0.8,
       first_pass_ms: 5.2,
@@ -319,6 +324,7 @@ const GOLDEN_RESULTS: Record<string, InspectionResult> = {
       human_approval_required: true,
       reasoning: ["first pass confidently detected a defect/contamination signal"],
     },
+    overlay_data_url: "/samples/overlays/crack_structural_fail_overlay.png",
     measurements: {
       decode_ms: 0.7,
       first_pass_ms: 4.9,
