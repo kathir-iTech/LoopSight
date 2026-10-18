@@ -30,13 +30,19 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r ../../requirements.txt
-          pip install pytest
+          pip install pytest httpx
 
       - name: Run the inference test suite
-        # The suite self-imports via sys.path and never needs a real Gemini key
-        # or real photos; it runs the full harness (phases B/C/D/E) on synthetic
-        # fixtures. A real-dataset swap is a one-command change, not a rewrite.
+        # Synthetic regression coverage; this does not establish field accuracy.
         run: python -X utf8 -m pytest tests/ -q
+
+      - name: Evaluate declared synthetic capture pairs
+        run: python scripts/evaluate_captures.py ../../data/synthetic_capture_manifest.json --json "${RUNNER_TEMP}/paired-capture-regression.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-paired-capture-regression
+          path: ${{ runner.temp }}/paired-capture-regression.json
 
   web-build:
     name: Web build (Next.js)

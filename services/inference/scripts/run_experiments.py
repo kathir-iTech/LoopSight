@@ -1,7 +1,10 @@
 """
-LoopSight v2 — full active-perception evaluation harness (Experiments A, B, B2, C).
+Legacy synthetic diagnostic harness (Experiments A, B, B2, C).
 
-Implements the matched-observation-budget experimental protocol across all
+Not a validated matched-budget comparison. Use evaluate_captures.py for exact
+requested-image budgets and manifest-based paired-capture evaluation.
+
+Retains the historical diagnostic protocol across all
 three inspection profiles:
   - water_turbidity_v1
   - structural_crack_metrology_v1
@@ -11,9 +14,8 @@ Experiments:
   A  — Single-pass baseline. First pass only; UNCERTAIN defaults to REVIEW.
   B  — Fixed two-pass. Every UNCERTAIN gets naive reinspect_roi(scale=2.0),
        regardless of the physical confounder (glare, stratification, lighting, shadow).
-  B2 — Matched observation budget control. Spends the exact same average number
-       of second-look observations as LoopSight (Experiment C), using fixed
-       reinspect_roi on a deterministic hash-matched subset.
+  B2 — Historical hash-selected repeat control. Realized tool budgets can differ
+       from C; do not describe this control as matched-budget evidence.
   C  — Adaptive Active Perception (LoopSight v2). Agent selects the specialized
        OpenCV 5 tool matching the first-pass evidence gap (inpaint_specular_glare,
        analyze_vertical_stratification, track_across_frames with backlit frame,
@@ -267,7 +269,7 @@ def run_experiment_c(
     elif tool_call.tool == "analyze_vertical_stratification":
         result = fn(frame, roi)
     elif tool_call.tool == "skeletonize_crack_metrology":
-        result = fn(frame, roi, mm_per_px=float(tool_call.arguments.get("mm_per_px", 0.10)))
+        result = fn(frame, roi)
     elif tool_call.tool == "track_across_frames":
         # Simulate second lighting (direct backlight recovery on dim/low-contrast samples,
         # while preserving true turbidity blur on genuinely turbid/borderline samples)
@@ -404,16 +406,12 @@ def print_report(results: Dict[str, Dict[str, float]], profile: str = "water_tur
         print(row)
     print("-" * 88)
 
-    print("\nThe number that settles whether adaptive active perception earns its complexity:")
+    print("\nLegacy diagnostic only: budgets and acquisition provenance are not controlled.")
     print("  conditional_benefit = P(correct|2nd look, was UNCERTAIN) - P(correct|1st look, was UNCERTAIN)")
     print(f"  Experiment C (Adaptive Agent) conditional_benefit = {results['C']['conditional_benefit']:+.4f}")
     print(f"  Experiment B (Fixed 2x Crop)  conditional_benefit = {results['B']['conditional_benefit']:+.4f}")
     print(f"  Experiment B2 (Matched Budget) conditional_benefit = {results['B2']['conditional_benefit']:+.4f}")
-    if results["C"]["conditional_benefit"] > 0.0:
-        print("  [PROVEN] Positive conditional_benefit: specialized OpenCV 5 second-look tools")
-        print("           resolve confounded UNCERTAIN cases that single-pass and naive repeat miss.")
-    else:
-        print("  [clue] ~zero or negative: adaptive isn't earning its complexity on this profile.")
+    print("  No adaptive advantage is established by this diagnostic. Use evaluate_captures.py.")
     print("=" * 88 + "\n")
 
 

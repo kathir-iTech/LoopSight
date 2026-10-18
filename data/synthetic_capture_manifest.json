@@ -1,0 +1,285 @@
+{
+  "schema_version": 1,
+  "label_scope": "relative_image_screening",
+  "description": "Generated regression fixtures only; labels are generator intent, not physical ground truth. Borderline fixtures excluded because they lack a binary label. Paired images are synthetic fixtures.",
+  "samples": [
+    {
+      "id": "sample_clear_01_ambient",
+      "group_id": "generator-family-clear",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "PASS",
+      "primary_image": "self_captured/clear/sample_clear_01_ambient.png"
+    },
+    {
+      "id": "sample_clear_02_ambient",
+      "group_id": "generator-family-clear",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "PASS",
+      "primary_image": "self_captured/clear/sample_clear_02_ambient.png"
+    },
+    {
+      "id": "sample_clear_03_ambient",
+      "group_id": "generator-family-clear",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "PASS",
+      "primary_image": "self_captured/clear/sample_clear_03_ambient.png"
+    },
+    {
+      "id": "sample_clear_04_ambient",
+      "group_id": "generator-family-clear",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "PASS",
+      "primary_image": "self_captured/clear/sample_clear_04_ambient.png"
+    },
+    {
+      "id": "sample_clear_05_ambient",
+      "group_id": "generator-family-clear",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "PASS",
+      "primary_image": "self_captured/clear/sample_clear_05_ambient.png"
+    },
+    {
+      "id": "sample_clear_06_ambient",
+      "group_id": "generator-family-clear",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "PASS",
+      "primary_image": "self_captured/clear/sample_clear_06_ambient.png"
+    },
+    {
+      "id": "sample_clear_07_ambient",
+      "group_id": "generator-family-clear",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "PASS",
+      "primary_image": "self_captured/clear/sample_clear_07_ambient.png"
+    },
+    {
+      "id": "sample_clear_08_ambient",
+      "group_id": "generator-family-clear",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "PASS",
+      "primary_image": "self_captured/clear/sample_clear_08_ambient.png"
+    },
+    {
+      "id": "sample_glare_01_ambient",
+      "group_id": "generator-family-clear_glare",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "PASS",
+      "primary_image": "self_captured/clear_glare/sample_glare_01_ambient.png"
+    },
+    {
+      "id": "sample_glare_02_ambient",
+      "group_id": "generator-family-clear_glare",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "PASS",
+      "primary_image": "self_captured/clear_glare/sample_glare_02_ambient.png"
+    },
+    {
+      "id": "sample_glare_03_ambient",
+      "group_id": "generator-family-clear_glare",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "PASS",
+      "primary_image": "self_captured/clear_glare/sample_glare_03_ambient.png"
+    },
+    {
+      "id": "sample_glare_04_ambient",
+      "group_id": "generator-family-clear_glare",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "PASS",
+      "primary_image": "self_captured/clear_glare/sample_glare_04_ambient.png"
+    },
+    {
+      "id": "sample_glare_05_ambient",
+      "group_id": "generator-family-clear_glare",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "PASS",
+      "primary_image": "self_captured/clear_glare/sample_glare_05_ambient.png"
+    },
+    {
+      "id": "sample_glare_06_ambient",
+      "group_id": "generator-family-clear_glare",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "PASS",
+      "primary_image": "self_captured/clear_glare/sample_glare_06_ambient.png"
+    },
+    {
+      "id": "sample_backlit_01_ambient",
+      "group_id": "generator-family-clear_dim_backlit",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "PASS",
+      "primary_image": "self_captured/clear_dim_backlit/sample_backlit_01_ambient.png",
+      "secondary_image": "self_captured/clear_dim_backlit/sample_backlit_01_backlight.png"
+    },
+    {
+      "id": "sample_backlit_02_ambient",
+      "group_id": "generator-family-clear_dim_backlit",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "PASS",
+      "primary_image": "self_captured/clear_dim_backlit/sample_backlit_02_ambient.png",
+      "secondary_image": "self_captured/clear_dim_backlit/sample_backlit_02_backlight.png"
+    },
+    {
+      "id": "sample_backlit_03_ambient",
+      "group_id": "generator-family-clear_dim_backlit",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "PASS",
+      "primary_image": "self_captured/clear_dim_backlit/sample_backlit_03_ambient.png",
+      "secondary_image": "self_captured/clear_dim_backlit/sample_backlit_03_backlight.png"
+    },
+    {
+      "id": "sample_backlit_04_ambient",
+      "group_id": "generator-family-clear_dim_backlit",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "PASS",
+      "primary_image": "self_captured/clear_dim_backlit/sample_backlit_04_ambient.png",
+      "secondary_image": "self_captured/clear_dim_backlit/sample_backlit_04_backlight.png"
+    },
+    {
+      "id": "sample_backlit_05_ambient",
+      "group_id": "generator-family-clear_dim_backlit",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "PASS",
+      "primary_image": "self_captured/clear_dim_backlit/sample_backlit_05_ambient.png",
+      "secondary_image": "self_captured/clear_dim_backlit/sample_backlit_05_backlight.png"
+    },
+    {
+      "id": "sample_backlit_06_ambient",
+      "group_id": "generator-family-clear_dim_backlit",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "PASS",
+      "primary_image": "self_captured/clear_dim_backlit/sample_backlit_06_ambient.png",
+      "secondary_image": "self_captured/clear_dim_backlit/sample_backlit_06_backlight.png"
+    },
+    {
+      "id": "sample_turbid_01_ambient",
+      "group_id": "generator-family-turbid",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "FAIL",
+      "primary_image": "self_captured/turbid/sample_turbid_01_ambient.png"
+    },
+    {
+      "id": "sample_turbid_02_ambient",
+      "group_id": "generator-family-turbid",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "FAIL",
+      "primary_image": "self_captured/turbid/sample_turbid_02_ambient.png"
+    },
+    {
+      "id": "sample_turbid_03_ambient",
+      "group_id": "generator-family-turbid",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "FAIL",
+      "primary_image": "self_captured/turbid/sample_turbid_03_ambient.png"
+    },
+    {
+      "id": "sample_turbid_04_ambient",
+      "group_id": "generator-family-turbid",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "FAIL",
+      "primary_image": "self_captured/turbid/sample_turbid_04_ambient.png"
+    },
+    {
+      "id": "sample_turbid_05_ambient",
+      "group_id": "generator-family-turbid",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "FAIL",
+      "primary_image": "self_captured/turbid/sample_turbid_05_ambient.png"
+    },
+    {
+      "id": "sample_turbid_06_ambient",
+      "group_id": "generator-family-turbid",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "FAIL",
+      "primary_image": "self_captured/turbid/sample_turbid_06_ambient.png"
+    },
+    {
+      "id": "sample_turbid_07_ambient",
+      "group_id": "generator-family-turbid",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "FAIL",
+      "primary_image": "self_captured/turbid/sample_turbid_07_ambient.png"
+    },
+    {
+      "id": "sample_turbid_08_ambient",
+      "group_id": "generator-family-turbid",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "FAIL",
+      "primary_image": "self_captured/turbid/sample_turbid_08_ambient.png"
+    },
+    {
+      "id": "sample_stratified_01_ambient",
+      "group_id": "generator-family-turbid_stratified",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "FAIL",
+      "primary_image": "self_captured/turbid_stratified/sample_stratified_01_ambient.png"
+    },
+    {
+      "id": "sample_stratified_02_ambient",
+      "group_id": "generator-family-turbid_stratified",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "FAIL",
+      "primary_image": "self_captured/turbid_stratified/sample_stratified_02_ambient.png"
+    },
+    {
+      "id": "sample_stratified_03_ambient",
+      "group_id": "generator-family-turbid_stratified",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "FAIL",
+      "primary_image": "self_captured/turbid_stratified/sample_stratified_03_ambient.png"
+    },
+    {
+      "id": "sample_stratified_04_ambient",
+      "group_id": "generator-family-turbid_stratified",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "FAIL",
+      "primary_image": "self_captured/turbid_stratified/sample_stratified_04_ambient.png"
+    },
+    {
+      "id": "sample_stratified_05_ambient",
+      "group_id": "generator-family-turbid_stratified",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "FAIL",
+      "primary_image": "self_captured/turbid_stratified/sample_stratified_05_ambient.png"
+    },
+    {
+      "id": "sample_stratified_06_ambient",
+      "group_id": "generator-family-turbid_stratified",
+      "split": "test",
+      "source_kind": "synthetic",
+      "expected_outcome": "FAIL",
+      "primary_image": "self_captured/turbid_stratified/sample_stratified_06_ambient.png"
+    }
+  ]
+}
