@@ -198,6 +198,15 @@ def _fixture_for_first_pass(first_pass) -> dict:
     gap_str = " ".join(first_pass.evidence_gap).lower() if first_pass.evidence_gap else ""
     allowed = first_pass.allowed_tools or []
 
+    # 0. Composite Confounders (both glare AND skew) -> Multi-Tool Active Perception DAG
+    if ("composite" in gap_str or ("glare" in gap_str and "skew" in gap_str)) and "inpaint_specular_glare" in allowed and "rectify_perspective_homography" in allowed:
+        return {
+            "tool": "inpaint_specular_glare -> rectify_perspective_homography",
+            "tool_chain": ["inpaint_specular_glare", "rectify_perspective_homography"],
+            "arguments": {"radius": 5.0},
+            "reason_code": "COMPOSITE_MULTI_CONFOUNDER_ACTIVE_PERCEPTION_DAG",
+        }
+
     # 1. Specular glare confounder -> inpaint_specular_glare
     if "glare" in gap_str and "inpaint_specular_glare" in allowed:
         return {
@@ -301,6 +310,11 @@ def _run_tool(
     tool_name = tool_call.tool
     args = tool_call.arguments or {}
 
+    chain = getattr(tool_call, "tool_chain", [])
+    if chain and len(chain) > 1:
+        from cv.tools import execute_tool_chain
+        return execute_tool_chain(chain, frame, roi, reference=reference, **args)
+
     if tool_name == "track_across_frames":
         fn = TOOL_REGISTRY["reinspect_roi"]
         return fn(frame, reference, roi, scale=2.0)
@@ -389,6 +403,147 @@ async def mcp_list_tools():
         "opencv_version": cv2.__version__,
         "tools": MCP_TOOL_DESCRIPTORS,
     }
+
+
+@app.post("/mcp/rpc")
+async def mcp_json_rpc(request: Request):
+    """Official Model Context Protocol (MCP) JSON-RPC 2.0 Server Endpoint.
+    Allows external AI agent frameworks (Claude Desktop, Gemini agents, LangChain/LlamaIndex)
+    to connect directly to LoopSight as an active-perception OpenCV 5 MCP Vision Server.
+
+    Supported JSON-RPC 2.0 Methods:
+      - 'initialize': Handshake returning server metadata and tool capabilities
+      - 'ping': Liveness verification
+      - 'tools/list': Returns all 8 OpenCV 5 active-perception tool descriptors
+      - 'tools/call': Executes an OpenCV 5 tool on a sample or base64 image and returns telemetry
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON-RPC body")
+
+    if not isinstance(body, dict) or body.get("jsonrpc") != "2.0":
+        return JSONResponse(
+            status_code=400,
+            content={
+                "jsonrpc": "2.0",
+                "id": body.get("id") if isinstance(body, dict) else None,
+                "error": {"code": -32600, "message": "Invalid Request: expected jsonrpc 2.0"},
+            },
+        )
+
+    req_id = body.get("id")
+    method = body.get("method")
+    params = body.get("params", {}) or {}
+
+    if method == "initialize":
+        return JSONResponse({
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "serverInfo": {
+                    "name": "loopsight-opencv5-mcp",
+                    "version": "0.2.0",
+                    "description": "LoopSight OpenCV 5 Active-Perception & Metrology Engine",
+                },
+                "capabilities": {
+                    "tools": {"listChanged": False},
+                },
+            },
+        })
+
+    elif method == "ping":
+        return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": {}})
+
+    elif method == "tools/list":
+        return JSONResponse({
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {"tools": MCP_TOOL_DESCRIPTORS},
+        })
+
+    elif method == "tools/call":
+        tool_name = params.get("name")
+        args = params.get("arguments", {}) or {}
+        if tool_name not in ALLOWED_TOOLS:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {"code": -32601, "message": f"Method/Tool not found: '{tool_name}'"},
+                },
+            )
+
+        sample_id = args.get("sample_id", "water_glare_confounded")
+        image_b64 = args.get("image_base64")
+        if image_b64:
+            try:
+                img_bytes = base64.b64decode(image_b64)
+                arr = np.frombuffer(img_bytes, dtype=np.uint8)
+                frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if frame is None:
+                    raise ValueError("imdecode returned None")
+            except Exception as e:
+                return JSONResponse({
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {"content": [{"type": "text", "text": f"Error decoding image_base64: {e}"}], "isError": True},
+                })
+        else:
+            try:
+                frame, _, _ = _generate_sample_frames(sample_id)
+            except Exception:
+                frame, _, _ = _generate_sample_frames("water_glare_confounded")
+
+        roi = (0, 0, frame.shape[1], frame.shape[0])
+        fn = TOOL_REGISTRY[tool_name]
+        try:
+            if tool_name == "track_across_frames":
+                tool_res = fn([frame, frame], roi)
+            elif tool_name in ("reinspect_roi", "compare_to_reference"):
+                tool_res = fn(frame, None, roi)
+            elif tool_name == "inpaint_specular_glare":
+                tool_res = fn(frame, roi, radius=float(args.get("radius", 5.0)))
+            elif tool_name == "skeletonize_crack_metrology":
+                tool_res = fn(frame, roi, mm_per_px=float(args.get("mm_per_px", 0.10)))
+            elif tool_name == "measure_edge_continuity":
+                tool_res = fn(frame, roi, low=int(args.get("low", 30)), high=int(args.get("high", 100)))
+            else:
+                tool_res = fn(frame, roi)
+
+            reg = tool_res.region
+            telemetry = {
+                "tool": tool_res.tool,
+                "notes": tool_res.notes,
+                "pattern_visibility": round(float(getattr(reg, "pattern_visibility", 0.0)), 4),
+                "estimated_ntu": round(float(getattr(reg, "estimated_ntu", 0.0)), 2),
+                "who_tier": str(getattr(reg, "who_tier", "PRISTINE")),
+                "crack_width_mm": round(float(getattr(reg, "crack_width_mm", 0.0)), 3),
+                "glare_ratio": round(float(getattr(reg, "glare_ratio", 0.0)), 4),
+            }
+            return JSONResponse({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [
+                        {"type": "text", "text": json.dumps(telemetry, indent=2)}
+                    ],
+                    "isError": False,
+                },
+            })
+        except Exception as e:
+            return JSONResponse({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {"content": [{"type": "text", "text": f"Tool execution failed: {e}"}], "isError": True},
+            })
+
+    return JSONResponse(
+        status_code=200,
+        content={"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": f"Method not found: '{method}'"}},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -520,7 +675,11 @@ def _execute_inspection_pipeline(
             fixture = _fixture_for_first_pass(first_pass)
             tool_call = select_tool(first_pass, mock_fixture=fixture)
         agent_ms = (time.perf_counter() - t_agent) * 1000
-        agent_call_dict = {"tool": tool_call.tool, "reason_code": tool_call.reason_code}
+        agent_call_dict = {
+            "tool": tool_call.tool,
+            "tool_chain": getattr(tool_call, "tool_chain", [tool_call.tool]),
+            "reason_code": tool_call.reason_code,
+        }
 
         real_two_frame = False
         frames_for_track: Optional[list] = None
@@ -597,6 +756,8 @@ def _execute_inspection_pipeline(
                 sec_entry["pattern_found"] = bool(getattr(reg, "pattern_found", False))
                 sec_entry["glare_ratio"] = float(getattr(reg, "glare_ratio", 0.0))
                 sec_entry["stratification_delta"] = float(getattr(reg, "stratification_delta", 0.0))
+                sec_entry["estimated_ntu"] = float(getattr(reg, "estimated_ntu", 0.0))
+                sec_entry["who_tier"] = str(getattr(reg, "who_tier", "PRISTINE"))
             if profile_name == "structural_crack_metrology_v1" or getattr(reg, "crack_width_mm", 0.0) > 0:
                 sec_entry["crack_width_mm"] = float(getattr(reg, "crack_width_mm", 0.0))
                 sec_entry["crack_length_px"] = float(getattr(reg, "crack_length_px", 0.0))
@@ -629,6 +790,8 @@ def _execute_inspection_pipeline(
             ev["pattern_visibility"] = float(pv)
             ev["pattern_sharpness"] = float(getattr(r, "pattern_sharpness", 0.0))
             ev["pattern_found"] = bool(getattr(r, "pattern_found", False))
+            ev["estimated_ntu"] = float(getattr(r, "estimated_ntu", 0.0))
+            ev["who_tier"] = str(getattr(r, "who_tier", "PRISTINE"))
         if profile_name == "structural_crack_metrology_v1" or getattr(r, "crack_severity_score", 0.0) > 0:
             ev["crack_width_mm"] = float(getattr(r, "crack_width_mm", 0.0))
             ev["crack_length_px"] = float(getattr(r, "crack_length_px", 0.0))

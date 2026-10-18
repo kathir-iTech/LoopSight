@@ -119,6 +119,78 @@ def test_sqlite_write_through_persistence():
         assert loaded["final_decision"]["decision"] == "PASS"
 
 
+def test_physical_ntu_estimation():
+    from cv.first_pass import estimate_physical_ntu
+    # 1. High visibility -> pristine domestic target (< 1.0 NTU)
+    ntu_clean, tier_clean = estimate_physical_ntu(0.85)
+    assert ntu_clean < 1.0, f"expected < 1.0 NTU for 0.85 visibility, got {ntu_clean}"
+    assert tier_clean == "PRISTINE"
+
+    # 2. Borderline threshold -> acceptable domestic supply limit (< 5.0 NTU)
+    ntu_border, tier_border = estimate_physical_ntu(0.55)
+    assert 1.0 <= ntu_border <= 5.5, f"expected ~4.8 NTU for 0.55 visibility, got {ntu_border}"
+    assert tier_border in ("ACCEPTABLE", "ELEVATED_TURBIDITY")
+
+    # 3. Turbid suspension -> elevated turbidity (> 5.0 NTU action threshold)
+    ntu_turbid, tier_turbid = estimate_physical_ntu(0.12)
+    assert ntu_turbid > 15.0, f"expected > 15.0 NTU for 0.12 visibility, got {ntu_turbid}"
+    assert tier_turbid == "ELEVATED_TURBIDITY"
+
+
+def test_multi_tool_chaining_execution():
+    from cv.tools import execute_tool_chain
+    from tests.synthetic import make_glare_confounded_water
+    frame = make_glare_confounded_water()
+    roi = (0, 0, frame.shape[1], frame.shape[0])
+
+    chain = ["inpaint_specular_glare", "rectify_perspective_homography"]
+    res = execute_tool_chain(chain, frame, roi, radius=5.0)
+    assert res.tool == "inpaint_specular_glare -> rectify_perspective_homography"
+    assert "Step 1 (inpaint_specular_glare)" in res.notes
+    assert "Step 2 (rectify_perspective_homography)" in res.notes
+    assert res.region.pattern_found is True
+    assert res.region.pattern_visibility > 0.20
+    assert res.region.estimated_ntu > 0
+
+
+def test_mcp_json_rpc_2_protocol():
+    from fastapi.testclient import TestClient
+    from main import app
+    with TestClient(app) as client:
+        # 1. Initialize
+        r_init = client.post("/mcp/rpc", json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+        assert r_init.status_code == 200
+        d_init = r_init.json()
+        assert d_init["jsonrpc"] == "2.0"
+        assert d_init["result"]["serverInfo"]["name"] == "loopsight-opencv5-mcp"
+
+        # 2. Ping
+        r_ping = client.post("/mcp/rpc", json={"jsonrpc": "2.0", "id": 2, "method": "ping"})
+        assert r_ping.status_code == 200
+        assert r_ping.json()["result"] == {}
+
+        # 3. tools/list
+        r_list = client.post("/mcp/rpc", json={"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
+        assert r_list.status_code == 200
+        tools = r_list.json()["result"]["tools"]
+        assert len(tools) == 8
+
+        # 4. tools/call
+        r_call = client.post(
+            "/mcp/rpc",
+            json={
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {"name": "inpaint_specular_glare", "arguments": {"sample_id": "water_glare_confounded", "radius": 5.0}},
+            },
+        )
+        assert r_call.status_code == 200
+        res_call = r_call.json()["result"]
+        assert not res_call["isError"]
+        assert "pattern_visibility" in res_call["content"][0]["text"]
+
+
 TESTS = [
     test_glare_confounder_triggers_uncertain_and_inpaint_resolves_pass,
     test_vertical_stratification_triggers_uncertain_and_resolves_fail,
@@ -126,6 +198,9 @@ TESTS = [
     test_structural_crack_metrology_profile_separates_intact_crack_and_confounder,
     test_mcp_tools_and_benchmark_samples_endpoints,
     test_sqlite_write_through_persistence,
+    test_physical_ntu_estimation,
+    test_multi_tool_chaining_execution,
+    test_mcp_json_rpc_2_protocol,
 ]
 
 if __name__ == "__main__":
@@ -143,3 +218,4 @@ if __name__ == "__main__":
             failed += 1
     print(f"--- {passed} passed, {failed} failed out of {len(TESTS)} ---")
     sys.exit(1 if failed else 0)
+
