@@ -86,10 +86,13 @@ proxy forwards the token server-side. The script uses a clean committed revision
 ARM64 builder, ECR image digest and stack deployment; failures are not suppressed.
 
 This environment has no AWS configuration/credential path or Vercel project token
-available. The actual account deployment, ARM64 container execution, production
-backend configuration and cloud cross-instance retrieval have **not** been
-verified. CloudFormation lint and ARM64 binary-wheel dependency resolution pass;
-neither establishes a running cloud system. AWS costs depend on the account and
+available. The actual account deployment, production backend configuration and cloud
+cross-instance retrieval have **not** been verified. The packaged Lambda image
+now builds and runs on a native ARM64 GitHub runner through AWS's runtime emulator,
+including OpenCV inspection and stored retrieval. CloudFormation lint and ARM64
+binary-wheel dependency resolution also pass. These do not establish an AWS
+account deployment or cloud S3 execution. See the
+[native verification metadata](../../reports/evidence/2026-10-18-native-arm64-lambda.json). AWS costs depend on the account and
 traffic; no free-tier guarantee is made. COOL is not integrated.
 
 ## Reliability and resource protection

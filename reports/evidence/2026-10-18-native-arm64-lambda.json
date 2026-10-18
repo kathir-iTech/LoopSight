@@ -1,0 +1,74 @@
+{
+  "evidence_type": "GitHub Actions native ARM64 job status and completed step metadata",
+  "source_head_commit": "85ec791dea4bcd583fa6ca6bae52e9ded6a55e80",
+  "workflow_url": "https://github.com/kathir-iTech/LoopSight/actions/runs/39119243531",
+  "job": {
+    "completed_at": "2026-10-18T10:26:51Z",
+    "conclusion": "success",
+    "html_url": "https://github.com/kathir-iTech/LoopSight/actions/runs/39119243531/job/117651253269",
+    "id": 117651253269,
+    "labels": [
+      "ubuntu-24.04-arm"
+    ],
+    "name": "Native ARM64 Lambda container",
+    "started_at": "2026-10-18T10:26:19Z",
+    "steps": [
+      {
+        "conclusion": "success",
+        "name": "Set up job"
+      },
+      {
+        "conclusion": "success",
+        "name": "Run actions/checkout@v4"
+      },
+      {
+        "conclusion": "success",
+        "name": "Build actual ARM64 Lambda image"
+      },
+      {
+        "conclusion": "success",
+        "name": "Start Lambda runtime emulator"
+      },
+      {
+        "conclusion": "success",
+        "name": "Invoke packaged handler on native ARM64"
+      },
+      {
+        "conclusion": "success",
+        "name": "Run actions/upload-artifact@v4"
+      },
+      {
+        "conclusion": "skipped",
+        "name": "Container diagnostics"
+      },
+      {
+        "conclusion": "success",
+        "name": "Stop test container"
+      },
+      {
+        "conclusion": "success",
+        "name": "Post Run actions/checkout@v4"
+      },
+      {
+        "conclusion": "success",
+        "name": "Complete job"
+      }
+    ]
+  },
+  "assertions_in_committed_smoke_helper": [
+    "host is aarch64/arm64",
+    "container runtime is aarch64/arm64",
+    "Python runtime is 3.13",
+    "OpenCV runtime is 5",
+    "runtime revision matches workflow revision",
+    "packaged inspection returns FAIL for generated turbid fixture",
+    "stored job retrieval works",
+    "unknown job returns404"
+  ],
+  "artifact_id": 12133542627,
+  "artifact_download_verified": false,
+  "artifact_note": "Artifact metadata exists; download was blocked by network. No independent artifact digest verification is claimed.",
+  "aws_account_deployed": false,
+  "cloud_s3_verified": false,
+  "physical_accuracy_validated": false
+}

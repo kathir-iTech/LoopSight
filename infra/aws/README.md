@@ -14,9 +14,10 @@ template uses S3. No COOL integration is claimed.
 - AWS CLI v2 authenticated to the intended account and region, with permission
   to deploy the reviewed CloudFormation resources, access ECR, pass/create the
   scoped role and resolve the generated Secrets Manager token.
-- Docker buildx with ARM64 execution support, or a native ARM64 builder. This
-  development environment's current builder supports amd64 only; do not claim
-  an ARM64 container test based on source import tests.
+- Docker buildx with ARM64 execution support, a native ARM64 builder, or the
+  exact-revision image archive produced by the native ARM64 GitHub CI job.
+  This development machine's builder supports amd64 only. Native GitHub CI now
+  builds/runs the actual Lambda image; that is separate from AWS account deployment.
 - Review account pricing, existing workloads and service quotas. Resources can
   incur charges. Reserved concurrency 2 bounds this function, but also requires
   account concurrency quota. The template adds private encrypted S3, one secret,
@@ -35,6 +36,19 @@ CloudFormation template, waits for completion and reports nonsecret outputs.
 It fails on errors and does not overwrite an existing function's configuration
 outside the stack. Use the same stack name for updates; choose a new name if
 an earlier manually created Lambda has the same function name.
+
+On an amd64 development machine, retrieve the successful workflow's
+`loopsight-arm64-lambda-image` artifact, verify its artifact digest against GitHub
+metadata, and use the extracted archive:
+
+```bash
+CI_IMAGE_ARCHIVE=/path/to/loopsight-arm64-lambda.tar.gz AWS_REGION=us-east-1 STACK_NAME=loopsight ./scripts/deploy_lambda.sh
+```
+
+The script checks the image architecture and exact Git revision label before
+cloud writes, then tags/pushes the verified image without executing ARM code
+locally. CI artifacts expire after one day; rerun the native job if unavailable.
+No privileged emulation setup is required on the development machine.
 
 The generated backend token is stored in Secrets Manager and injected into the
 Lambda environment using a dynamic reference. A permitted operator must set
@@ -57,7 +71,12 @@ Run the deployed smoke helper through the website, using its HTTPS URL:
 .venv/bin/python services/inference/scripts/smoke_deployed.py --web-base https://YOUR-PREVIEW.vercel.app --output /tmp/deployed-smoke.json
 ```
 
-The helper requires an actual ARM64 backend, the expected revision and shared
+The native container check already passed on an ARM64 GitHub runner through
+the Lambda runtime emulator, including packaged OpenCV processing and stored job
+retrieval. See [verification metadata](../../reports/evidence/2026-10-18-native-arm64-lambda.json).
+It does not verify an AWS account deployment or S3 cloud execution.
+
+The deployed helper requires an actual ARM64 backend, the expected revision and shared
 S3 adapters; posts generated images through the web proxy; verifies recapture,
 retained pixels, evidence manifest hashes and unknown/invalid request errors.
 Use `--expected-revision` for the exact deployed commit. It does not establish

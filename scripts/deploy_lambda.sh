@@ -22,17 +22,32 @@ DEPLOY_REVISION="$(git rev-parse HEAD)"
 DEPLOY_ACCOUNT="$(aws sts get-caller-identity --query Account --output text --region "$DEPLOY_REGION")"
 DEPLOY_REGISTRY="${DEPLOY_ACCOUNT}.dkr.ecr.${DEPLOY_REGION}.amazonaws.com"
 DEPLOY_IMAGE="${DEPLOY_REGISTRY}/${DEPLOY_REPO}"
-BUILDER_INFO="$(docker buildx inspect --bootstrap)"
-if [[ "$BUILDER_INFO" != *"linux/arm64"* ]]; then
-  echo "An ARM64 builder is required. No cloud resources have been created." >&2
-  exit 1
+if [[ -n "${CI_IMAGE_ARCHIVE:-}" ]]; then
+  docker load --input "$CI_IMAGE_ARCHIVE"
+  IMAGE_ARCH="$(docker image inspect loopsight-arm64:check --format '{{.Architecture}}')"
+  IMAGE_REVISION="$(docker image inspect loopsight-arm64:check --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+  if [[ "$IMAGE_ARCH" != "arm64" || "$IMAGE_REVISION" != "$DEPLOY_REVISION" ]]; then
+    echo "The CI image must be ARM64 and match the current exact Git revision." >&2
+    exit 1
+  fi
+else
+  BUILDER_INFO="$(docker buildx inspect --bootstrap)"
+  if [[ "$BUILDER_INFO" != *"linux/arm64"* ]]; then
+    echo "Use an ARM64 builder or the verified CI_IMAGE_ARCHIVE for this revision. No cloud resources have been created." >&2
+    exit 1
+  fi
 fi
 if ! aws ecr describe-repositories --repository-names "$DEPLOY_REPO" --region "$DEPLOY_REGION" >/dev/null 2>&1; then
   aws ecr create-repository --repository-name "$DEPLOY_REPO" --image-scanning-configuration scanOnPush=true --region "$DEPLOY_REGION" >/dev/null
 fi
 aws ecr get-login-password --region "$DEPLOY_REGION" | docker login --username AWS --password-stdin "$DEPLOY_REGISTRY"
-docker buildx build --platform linux/arm64 --provenance=false \
-  -f services/inference/Dockerfile.lambda -t "${DEPLOY_IMAGE}:${DEPLOY_REVISION}" --push .
+if [[ -n "${CI_IMAGE_ARCHIVE:-}" ]]; then
+  docker tag loopsight-arm64:check "${DEPLOY_IMAGE}:${DEPLOY_REVISION}"
+  docker push "${DEPLOY_IMAGE}:${DEPLOY_REVISION}"
+else
+  docker buildx build --platform linux/arm64 --provenance=false \
+    -f services/inference/Dockerfile.lambda -t "${DEPLOY_IMAGE}:${DEPLOY_REVISION}" --push .
+fi
 DEPLOY_DIGEST="$(aws ecr describe-images --repository-name "$DEPLOY_REPO" --image-ids imageTag="$DEPLOY_REVISION" --query 'imageDetails[0].imageDigest' --output text --region "$DEPLOY_REGION")"
 if [[ ! "$DEPLOY_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
   echo "Could not resolve an immutable image digest." >&2

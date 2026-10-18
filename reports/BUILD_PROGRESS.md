@@ -3,7 +3,24 @@
 Updated 18 October 2026. Presentation/video quality is excluded. This is the
 current status record; the earlier strict review remains the baseline audit.
 
-## Website and cloud-storage build — latest batch
+## Native ARM64 follow-up
+
+The actual Lambda image now **builds and runs on a native ARM64 GitHub runner**.
+The packaged handler passes `/version`, readiness, generated OpenCV inspection,
+stored result retrieval and unknown-job checks through AWS's runtime emulator.
+See [the successful job and recorded metadata](evidence/2026-10-18-native-arm64-lambda.json).
+This supersedes earlier statements that ARM64 container execution was unverified;
+actual AWS account deployment and shared cloud S3 execution remain unverified.
+The native job also exports an exact-revision image archive so deployment from
+this amd64 environment does not require a privileged emulator or ARM laptop.
+Architecture/revision mismatch paths are covered by three deployment-script tests.
+
+The Vercel CLI is installed outside the repository. Provider authentication
+endpoints remain blocked and no AWS/Vercel credentials are present. Missing secure
+connection fields and provider domains are saved in the environment draft; chat
+permission alone does not authenticate either account.
+
+## Website and cloud-storage build — previous batch
 
 - Shared private **S3 job/capture adapters** are implemented with object/pixel
   hashes, expiry, encryption and no cloud-to-memory fallback. Separate-store
@@ -13,7 +30,8 @@ current status record; the earlier strict review remains the baseline audit.
 - CloudFormation/deploy script provide scoped storage permissions, generated
   backend token, ARM64 revision/digest, concurrency, logs and an alarm. The
   template passes cfn-lint 1.57.2; pinned Python 3.13 dependencies resolve to
-  ARM64 wheels. No real ARM64 container or account deployment is inferred.
+  ARM64 wheels. The later native job above verifies container execution;
+  AWS account deployment remains unverified.
 - The website adds `/evaluation`, `/capture-guide`, a printable checkerboard,
   real backend/storage-read status and an evidence ZIP download. Mobile layout
   was inspected; a 412px viewport has no document overflow.

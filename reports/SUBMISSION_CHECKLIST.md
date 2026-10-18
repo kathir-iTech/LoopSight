@@ -16,12 +16,14 @@ Source: [verified current Devpost rules](COMPETITION_RULES_RECHECK.md), checked
 - [x] Real capture guide and printable target; no generated images labeled physical.
 - [x] Evidence ZIP with analysis images, policy snapshot, result and file hash manifest.
 - [x] Backend/API tests, production build and desktop/mobile browser workflows.
+- [x] Actual native ARM64 Lambda container build and handler smoke in GitHub CI.
 
 ## Required before final submission
 
 - [ ] Confirm the private Devpost project, team and individual eligibility details.
-- [ ] Execute reviewed AWS deployment in the intended account; verify actual ARM64,
-  build revision, authenticated web proxy and shared evidence storage.
+- [ ] Execute reviewed AWS deployment in the intended account; verify its actual
+  runtime/revision, authenticated web proxy and shared evidence storage. Native
+  container testing is complete, but does not establish account deployment.
 - [ ] Demonstrate meaningful AWS execution with real requests and retained
   evidence, plus actual deployment/log/cost identifiers. No hardcoded timings.
 - [ ] Run the deployed smoke helper through the judge-accessible website.

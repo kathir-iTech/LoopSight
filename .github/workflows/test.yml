@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build actual ARM64 Lambda image
         run: |
-          if ! docker build --platform linux/arm64 -f services/inference/Dockerfile.lambda -t loopsight-arm64:check . > /tmp/loopsight-arm-build.log 2>&1; then
+          if ! docker build --platform linux/arm64 --label org.opencontainers.image.revision=${{ github.event.pull_request.head.sha || github.sha }} -f services/inference/Dockerfile.lambda -t loopsight-arm64:check . > /tmp/loopsight-arm-build.log 2>&1; then
             tail -n 40 /tmp/loopsight-arm-build.log
             python3 - <<'PY'
           from pathlib import Path
@@ -38,6 +38,14 @@ jobs:
         with:
           name: native-arm64-lambda-verification
           path: /tmp/native-arm64-lambda.json
+      - name: Preserve the verified image for deployment from an amd64 machine
+        run: docker save loopsight-arm64:check | gzip > /tmp/loopsight-arm64-lambda.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: loopsight-arm64-lambda-image
+          path: /tmp/loopsight-arm64-lambda.tar.gz
+          retention-days: 1
+          compression-level: 0
       - name: Container diagnostics
         if: failure()
         run: docker logs loopsight-arm64 || true
