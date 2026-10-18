@@ -12,7 +12,7 @@ Supported InspectionProfiles:
                                    and vertical settling stratification).
   2. structural_crack_metrology_v1 — Civil/structural crack metrology (CLAHE, bilateral
                                    filtering, morphological black-hat, Euclidean distance
-                                   transform width in mm, and tortuosity).
+                                   transform width in image pixels, and tortuosity).
   3. fdm_print_surface_v1        — Manufacturing surface & edge continuity QC.
 """
 
@@ -41,10 +41,10 @@ class InspectionProfile:
     # water-turbidity-specific thresholds
     pattern_visibility_confident_turbid: float = 0.20
     pattern_visibility_confident_clear: float = 0.55
-    # structural-crack-specific thresholds (mm and severity 0..1)
+    # Image-space screening thresholds (analysis pixels and severity 0..1)
     crack_severity_confident_pass: float = 0.16
     crack_severity_confident_fail: float = 0.55
-    crack_width_mm_fail: float = 0.40
+    crack_width_px_fail: float = 4.0
 
 
 PROFILES: dict[str, InspectionProfile] = {
@@ -72,7 +72,7 @@ PROFILES: dict[str, InspectionProfile] = {
         reference_similarity_floor=0.40,
         crack_severity_confident_pass=0.16,
         crack_severity_confident_fail=0.55,
-        crack_width_mm_fail=0.40,
+        crack_width_px_fail=4.0,
     ),
 }
 
@@ -95,34 +95,10 @@ class RegionEvidence:
     skew_deg: float = 0.0
     stratification_delta: float = 0.0
     # structural crack metrology fields
-    crack_width_mm: float = 0.0
+    crack_width_px: float = 0.0
     crack_length_px: float = 0.0
     crack_severity_score: float = 0.0
     detection_method: str = "full_frame"
-    # physical optical nephelometry & standards
-    estimated_ntu: float = 0.0
-    who_tier: str = "PRISTINE"
-
-
-def estimate_physical_ntu(pattern_visibility: float) -> tuple[float, str]:
-    """
-    Physical Beer-Lambert optical nephelometry conversion model.
-    Relates pattern visibility contrast attenuation to Nephelometric Turbidity Units (NTU)
-    aligned with WHO and Indian domestic drinking water guidelines (BIS IS 10500:2012):
-      - PRISTINE: < 1.0 NTU (Target standard for treated / mountain spring water)
-      - ACCEPTABLE: 1.0 - 5.0 NTU (Maximum permissible limit for domestic supply)
-      - ELEVATED_TURBIDITY: > 5.0 NTU (Exceeds domestic limit; actionable treatment required)
-    """
-    vis = max(0.005, min(0.995, float(pattern_visibility)))
-    ntu = 3.5 * ((1.0 / vis) - 1.0) ** 1.15
-    ntu_val = round(float(ntu), 2)
-    if ntu_val < 1.0:
-        tier = "PRISTINE"
-    elif ntu_val <= 5.0:
-        tier = "ACCEPTABLE"
-    else:
-        tier = "ELEVATED_TURBIDITY"
-    return ntu_val, tier
 
 
 @dataclass
@@ -293,8 +269,6 @@ def measure_pattern_visibility(
     contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     layer_alignment_deviation = _contour_deviation_score(contours, gray.shape)
 
-    ntu_val, who_tier = estimate_physical_ntu(pattern_visibility)
-
     return RegionEvidence(
         x=x,
         y=y,
@@ -311,20 +285,18 @@ def measure_pattern_visibility(
         skew_deg=skew_deg,
         stratification_delta=stratification_delta,
         detection_method=det_method,
-        estimated_ntu=ntu_val,
-        who_tier=who_tier,
     )
 
 
 def measure_crack_metrology(
     frame: np.ndarray,
     roi: tuple[int, int, int, int],
-    mm_per_px: float = 0.10,
 ) -> RegionEvidence:
     """Structural crack metrology (structural_crack_metrology_v1).
     Uses bilateral surface-noise suppression, morphological black-hat filament extraction,
     connected-component filtering, and Euclidean distance transform (cv2.distanceTransform)
-    to measure calibrated crack width in mm, length in px, and severity score."""
+    to measure image-space ridge width/length in pixels and a heuristic severity score.
+    No physical scale or structural safety conclusion is inferred."""
     x, y, w, h = roi
     crop = frame[y:y + h, x:x + w]
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
@@ -347,7 +319,7 @@ def measure_crack_metrology(
             layer_alignment_deviation=0.0,
             local_contrast=local_contrast,
             glare_ratio=glare_ratio,
-            crack_width_mm=0.0,
+            crack_width_px=0.0,
             crack_length_px=0.0,
             crack_severity_score=0.0,
             detection_method="blackhat_clean",
@@ -376,7 +348,7 @@ def measure_crack_metrology(
             layer_alignment_deviation=0.0,
             local_contrast=local_contrast,
             glare_ratio=glare_ratio,
-            crack_width_mm=0.0,
+            crack_width_px=0.0,
             crack_length_px=0.0,
             crack_severity_score=0.0,
             detection_method="blackhat_filtered_clean",
@@ -387,12 +359,12 @@ def measure_crack_metrology(
     ridge_vals = dist[clean_mask > 0]
     p90_radius_px = float(np.percentile(ridge_vals, 85)) if ridge_vals.size else 0.0
     width_px = max(0.0, p90_radius_px * 2.0)
-    crack_width_mm = round(width_px * mm_per_px, 3)
+    crack_width_px = round(width_px, 3)
 
-    # Severity blends normalized width (0.6mm = 1.0) and span coverage
+    # Heuristic severity blends image-space width (6 px = 1.0) and span coverage
     diag = float(np.hypot(w, h)) or 1.0
     len_norm = min(max_len / (diag * 0.55), 1.0)
-    width_norm = min(crack_width_mm / 0.60, 1.0)
+    width_norm = min(crack_width_px / 6.0, 1.0)
     severity = round(float(0.60 * width_norm + 0.40 * len_norm), 4)
 
     contours, _ = cv2.findContours(clean_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -408,7 +380,7 @@ def measure_crack_metrology(
         layer_alignment_deviation=tortuosity,
         local_contrast=local_contrast,
         glare_ratio=glare_ratio,
-        crack_width_mm=crack_width_mm,
+        crack_width_px=crack_width_px,
         crack_length_px=round(max_len, 1),
         crack_severity_score=severity,
         detection_method="distance_transform_metrology",
@@ -636,18 +608,18 @@ def score_evidence(regions: list[RegionEvidence], profile: InspectionProfile) ->
 
         if (
             worst_crack.crack_severity_score >= profile.crack_severity_confident_fail
-            or worst_crack.crack_width_mm >= profile.crack_width_mm_fail
+            or worst_crack.crack_width_px >= profile.crack_width_px_fail
         ):
             return FirstPassResult(status="CONFIDENT_FAIL", regions=regions)
 
-        if worst_crack.crack_severity_score <= profile.crack_severity_confident_pass and worst_crack.crack_width_mm < 0.15:
+        if worst_crack.crack_severity_score <= profile.crack_severity_confident_pass and worst_crack.crack_width_px < 1.5:
             return FirstPassResult(status="CONFIDENT_PASS", regions=regions)
 
         return FirstPassResult(
             status="UNCERTAIN",
             regions=regions,
             evidence_gap=[
-                f"hairline/shadow ambiguity: crack_severity={worst_crack.crack_severity_score:.2f} (width={worst_crack.crack_width_mm:.2f}mm) in borderline band — run medial-axis skeletonization metrology"
+                f"hairline/shadow ambiguity: crack_severity={worst_crack.crack_severity_score:.2f} (width={worst_crack.crack_width_px:.2f}px) in borderline band — run medial-axis skeletonization metrology"
             ],
             allowed_tools=["skeletonize_crack_metrology", "reinspect_roi", "measure_edge_continuity"],
         )

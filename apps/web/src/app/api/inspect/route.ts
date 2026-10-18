@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createJob, fixtureByCase } from "@/lib/mock-data";
 import { proxyInference } from "@/lib/inference";
+import { MEASUREMENT_CONTRACT } from "@/lib/measurements";
 
 export async function POST(request: NextRequest) {
   let formData: FormData;
@@ -21,6 +22,7 @@ export async function POST(request: NextRequest) {
     }
     const result = {
       ...fixture,
+      measurement_contract: MEASUREMENT_CONTRACT,
       provenance: { execution_mode: "demo_fixture" as const },
     };
     const jobId = createJob(result, caseKey);

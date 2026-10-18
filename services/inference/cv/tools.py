@@ -11,7 +11,7 @@ OpenCV 5 geometric, photometric, or multi-frame operation:
   5. inpaint_specular_glare         — HSV/LAB specular reflection masking + cv2.inpaint (Telea) + CLAHE
   6. rectify_perspective_homography — Corner/quadrilateral detection + cv2.warpPerspective fronto-parallel rectification
   7. analyze_vertical_stratification — 3-zone vertical column nephelometry (supernatant vs sediment settling)
-  8. skeletonize_crack_metrology    — CLAHE + morphological black-hat + Euclidean distance transform (mm)
+  8. skeletonize_crack_metrology    — illumination normalization + distance-transform width (pixels)
 """
 
 from __future__ import annotations
@@ -222,7 +222,7 @@ def inpaint_specular_glare(
     fake_roi = (0, 0, enhanced_bgr.shape[1], enhanced_bgr.shape[0])
     region = measure_pattern_visibility(enhanced_bgr, fake_roi)
     region.x, region.y, region.w, region.h = x, y, w, h
-    region.glare_ratio = round(float(glare_frac * 0.15), 4)  # residual after inpainting
+    # Keep the remeasured value; do not invent a fixed percentage improvement.
     region.detection_method = "telea_inpaint_clahe"
     return ToolResult(
         tool="inpaint_specular_glare",
@@ -351,7 +351,6 @@ def analyze_vertical_stratification(
 def skeletonize_crack_metrology(
     frame: np.ndarray,
     roi: tuple[int, int, int, int],
-    mm_per_px: float = 0.10,
 ) -> ToolResult:
     """High-precision second-look structural crack metrology tool.
     Applies illumination trend removal (large-kernel Gaussian division) so broad
@@ -373,7 +372,7 @@ def skeletonize_crack_metrology(
     norm_bgr = cv2.cvtColor(norm, cv2.COLOR_GRAY2BGR)
 
     fake_roi = (0, 0, norm_bgr.shape[1], norm_bgr.shape[0])
-    region = measure_crack_metrology(norm_bgr, fake_roi, mm_per_px=mm_per_px)
+    region = measure_crack_metrology(norm_bgr, fake_roi)
     region.x, region.y, region.w, region.h = x, y, w, h
     region.detection_method = "homomorphic_shadow_removed_distance_transform"
     return ToolResult(
@@ -381,7 +380,7 @@ def skeletonize_crack_metrology(
         region=region,
         notes=(
             f"illumination-normalized distance-transform metrology: "
-            f"crack_width={region.crack_width_mm:.3f}mm, length={region.crack_length_px:.1f}px, "
+            f"crack_width={region.crack_width_px:.3f}px, length={region.crack_length_px:.1f}px, "
             f"severity={region.crack_severity_score:.3f}"
         ),
     )
@@ -444,8 +443,7 @@ def execute_tool_chain(
         elif tool_name == "analyze_vertical_stratification":
             res = fn(current_frame, roi)
         elif tool_name == "skeletonize_crack_metrology":
-            mm = float(kwargs.get("mm_per_px", 0.10))
-            res = fn(current_frame, roi, mm_per_px=mm)
+            res = fn(current_frame, roi)
         elif tool_name == "measure_edge_continuity":
             low = int(kwargs.get("low", 30))
             high = int(kwargs.get("high", 100))

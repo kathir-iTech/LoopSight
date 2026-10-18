@@ -4,7 +4,7 @@ import { Toaster } from "react-hot-toast";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "LoopSight v2 — Active-Perception Optical Nephelometry & Metrology",
+  title: "LoopSight — Evidence-Guided Visual Screening",
   description:
     "Household drinking-water turbidity screening and structural crack metrology. Flags cloudy water for follow-up. OpenCV 5 + MCP active perception under different lighting.",
   manifest: "/manifest.json",

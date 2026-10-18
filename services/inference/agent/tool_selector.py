@@ -3,7 +3,7 @@ LoopSight v2 — bounded agent tool selection & MCP tool schema definitions.
 
 Enforces double-layer whitelist validation, passes full multi-domain OpenCV 5
 telemetry (pattern_visibility, glare_ratio, skew_deg, stratification_delta,
-crack_width_mm, crack_severity_score, edge_continuity, local_contrast) into
+crack_width_px, crack_severity_score, edge_continuity, local_contrast) into
 the Gemini prompt, and provides MCP-compatible tool descriptors for the
 OpenCV AI Competition 2026 Agentic Vision & MCP track.
 """
@@ -23,7 +23,6 @@ MAX_TOOL_CHAIN_LENGTH = 4
 TOOL_ARGUMENT_LIMITS = {
     "reinspect_roi": {"scale": (1.0, 4.0)},
     "inpaint_specular_glare": {"radius": (1.0, 15.0)},
-    "skeletonize_crack_metrology": {"mm_per_px": (0.0001, 10.0)},
     "measure_edge_continuity": {"low": (0, 255), "high": (0, 255)},
 }
 
@@ -48,10 +47,10 @@ MCP_TOOL_DESCRIPTORS = [
     },
     {
         "name": "skeletonize_crack_metrology",
-        "description": "Removes low-frequency shadow gradients via homomorphic Gaussian division and measures sub-millimeter fracture width via Euclidean distance transform (cv2.distanceTransform).",
+        "description": "Removes low-frequency shadow gradients via homomorphic Gaussian division and measures image-space line width in pixels via Euclidean distance transform (cv2.distanceTransform).",
         "inputSchema": {
             "type": "object",
-            "properties": {"mm_per_px": {"type": "number", "default": 0.10}},
+            "properties": {},
         },
     },
     {
@@ -178,7 +177,7 @@ def _build_prompt(first_pass: FirstPassResult) -> str:
             "glare_ratio": round(float(getattr(r, "glare_ratio", 0.0)), 4),
             "skew_deg": round(float(getattr(r, "skew_deg", 0.0)), 2),
             "stratification_delta": round(float(getattr(r, "stratification_delta", 0.0)), 4),
-            "crack_width_mm": round(float(getattr(r, "crack_width_mm", 0.0)), 3),
+            "crack_width_px": round(float(getattr(r, "crack_width_px", 0.0)), 3),
             "crack_severity_score": round(float(getattr(r, "crack_severity_score", 0.0)), 4),
         }
         for r in first_pass.regions

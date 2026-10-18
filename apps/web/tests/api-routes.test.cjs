@@ -25,6 +25,7 @@ function loadTs(file) {
 }
 const { POST } = loadTs(path.join(source, "app/api/inspect/route.ts"));
 const { GET } = loadTs(path.join(source, "app/api/jobs/[id]/route.ts"));
+const { GET: GET_CAPTURE } = loadTs(path.join(source, "app/api/jobs/[id]/captures/[index]/route.ts"));
 const savedFetch = global.fetch;
 const variables = ["VERCEL", "INFERENCE_API_URL", "DEMO_MODE", "DEMO_CASE", "FAIL_CLOSED_PROD"];
 let savedEnv;
@@ -99,6 +100,10 @@ test("explicit fixtures carry provenance through creation and retrieval", async 
   assert.equal(response.status, 200);
   const data = await response.json();
   assert.equal(data.result.provenance.execution_mode, "demo_fixture");
+  assert.equal(data.result.measurement_contract.physical_units_available, false);
+  for (const forbidden of ["estimated_ntu", "who_tier", "crack_width_mm"]) {
+    assert.equal(JSON.stringify(data.result).includes(forbidden), false);
+  }
   assert.equal((await (await job(data.job_id)).json()).provenance.execution_mode, "demo_fixture");
   assert.equal((await job("this-job-never-existed")).status, 404);
   assert.equal((await job("missing-crack-job")).status, 404);
@@ -115,4 +120,41 @@ test("timeouts return a gateway error without a verdict", async () => {
 test("malformed forms return 400", async () => {
   const response = await POST(new Request("http://example.test/api/inspect", { method: "POST", body: "oops" }));
   assert.equal(response.status, 400);
+});
+
+test("follow-up uploads preserve the original job and actual new file", async () => {
+  process.env.INFERENCE_API_URL = "http://backend.test";
+  global.fetch = async (_url, options) => {
+    assert.equal(options.body.get("original_job_id"), "parent-id");
+    assert.equal(options.body.get("lighting2"), "backlight");
+    assert.equal(await options.body.get("image").text(), "not-an-image");
+    return Response.json({ job_id: "follow-up-id" });
+  };
+  const response = await inspection({ original_job_id: "parent-id", lighting2: "backlight" });
+  assert.equal((await response.json()).job_id, "follow-up-id");
+});
+
+test("retained capture proxy preserves PNG bytes and prevents shared caching", async () => {
+  process.env.INFERENCE_API_URL = "http://backend.test";
+  const bytes = Uint8Array.from([137, 80, 78, 71]);
+  global.fetch = async (url) => {
+    assert.equal(url, "http://backend.test/jobs/parent-id/captures/1");
+    return new Response(bytes, { headers: { "Content-Type": "image/png" } });
+  };
+  const response = await GET_CAPTURE(new Request("http://example.test"), {
+    params: Promise.resolve({ id: "parent-id", index: "1" }),
+  });
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), bytes);
+  assert.equal(response.headers.get("cache-control"), "private, no-store");
+  assert.equal(response.headers.get("content-type"), "image/png");
+});
+
+test("expired capture errors are preserved instead of replaced by sample images", async () => {
+  process.env.INFERENCE_API_URL = "http://backend.test";
+  global.fetch = async () => Response.json({ detail: "capture expired" }, { status: 410 });
+  const response = await GET_CAPTURE(new Request("http://example.test"), {
+    params: Promise.resolve({ id: "parent-id", index: "0" }),
+  });
+  assert.equal(response.status, 410);
+  assert.equal((await response.json()).detail, "capture expired");
 });

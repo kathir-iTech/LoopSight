@@ -29,6 +29,8 @@ def decide(
     first_pass: FirstPassResult,
     second_pass_region: RegionEvidence | None,
     profile_name: str = "fdm_print_surface_v1",
+    *,
+    independent_capture: bool = False,
 ) -> FinalDecision:
     profile = PROFILES[profile_name]
 
@@ -91,6 +93,12 @@ def decide(
         pv = getattr(second_pass_region, "pattern_visibility", 0.0) or 0.0
         metric_val = pv if pv > 0 else second_pass_region.edge_continuity
         if metric_val >= profile.pattern_visibility_confident_clear:
+            if not independent_capture:
+                return FinalDecision(
+                    decision="REVIEW", confidence_band="low", evidence_changed=False,
+                    human_approval_required=True,
+                    reasoning=["same-image processing raised visibility; capture a new photo under different lighting before clearing the sample"],
+                )
             return FinalDecision(
                 decision="PASS",
                 confidence_band="medium",
@@ -120,28 +128,28 @@ def decide(
             ],
         )
 
-    # 2. Structural crack metrology profile: resolves via crack_severity_score and crack_width_mm
+    # 2. Structural crack metrology profile: resolves via crack_severity_score and crack_width_px
     if profile_name == "structural_crack_metrology_v1":
         sev = getattr(second_pass_region, "crack_severity_score", 0.0) or 0.0
-        width_mm = getattr(second_pass_region, "crack_width_mm", 0.0) or 0.0
-        if sev >= profile.crack_severity_confident_fail or width_mm >= profile.crack_width_mm_fail:
+        width_px = getattr(second_pass_region, "crack_width_px", 0.0) or 0.0
+        if sev >= profile.crack_severity_confident_fail or width_px >= profile.crack_width_px_fail:
             return FinalDecision(
                 decision="FAIL",
                 confidence_band="medium",
                 evidence_changed=True,
                 human_approval_required=True,
                 reasoning=[
-                    f"second-pass metrology confirmed structural crack (width={width_mm:.2f}mm, severity={sev:.2f})"
+                    f"second-pass image screening detected a crack-like feature (width={width_px:.2f}px, severity={sev:.2f})"
                 ],
             )
-        if sev <= profile.crack_severity_confident_pass and width_mm < 0.15:
+        if sev <= profile.crack_severity_confident_pass and width_px < 1.5:
             return FinalDecision(
                 decision="PASS",
                 confidence_band="medium",
                 evidence_changed=True,
                 human_approval_required=False,
                 reasoning=[
-                    f"second-pass illumination-normalized metrology cleared shadow/surface artifact (width={width_mm:.2f}mm, severity={sev:.2f})"
+                    f"second-pass illumination-normalized metrology cleared shadow/surface artifact (width={width_px:.2f}px, severity={sev:.2f})"
                 ],
             )
         return FinalDecision(
@@ -150,7 +158,7 @@ def decide(
             evidence_changed=True,
             human_approval_required=True,
             reasoning=[
-                f"second-pass hairline crack (width={width_mm:.2f}mm, severity={sev:.2f}) remains in borderline monitoring band"
+                f"second-pass line feature (width={width_px:.2f}px, severity={sev:.2f}) remains in borderline image-score band"
             ],
         )
 

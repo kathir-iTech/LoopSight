@@ -72,7 +72,7 @@ function isWaterResult(result: InspectionResult): boolean {
 
 function isCrackResult(result: InspectionResult): boolean {
   if (result.inspection_profile === "structural_crack_metrology_v1") return true;
-  if (result.regions.some((r) => (r.evidence.crack_width_mm ?? 0) > 0 || (r.evidence.crack_severity_score ?? 0) > 0))
+  if (result.regions.some((r) => (r.evidence.crack_width_px ?? 0) > 0 || (r.evidence.crack_severity_score ?? 0) > 0))
     return true;
   return false;
 }
@@ -80,7 +80,7 @@ function isCrackResult(result: InspectionResult): boolean {
 function ClarityGauge({ value, label, sublabel }: { value: number; label: string; sublabel?: string }) {
   const pct = Math.max(0, Math.min(1, value));
   const statusColor = pct <= 0.20 ? "#ef4444" : pct >= 0.55 ? "#38bdf8" : "#f59e0b";
-  const statusText = pct <= 0.20 ? "Turbid" : pct >= 0.55 ? "Clear" : "Borderline";
+  const statusText = pct <= 0.20 ? "Low visibility" : pct >= 0.55 ? "High visibility" : "Borderline";
   const circumference = 2 * Math.PI * 44;
   const offset = circumference * (1 - pct);
   const gradId = `grad-${label.replace(/\s+/g, "")}-${Math.round(pct * 100)}`;
@@ -169,6 +169,7 @@ export default function JobPage() {
   const id = params.id as string;
 
   const [result, setResult] = useState<InspectionResult | null>(null);
+  const [captureUnavailable, setCaptureUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [polling, setPolling] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -181,15 +182,8 @@ export default function JobPage() {
   useEffect(() => {
     if (typeof window !== "undefined") {
       const customImg = sessionStorage.getItem(`loopsight_user_img_${id}`);
-      if (customImg) setUserCustomImage(customImg);
-      const cached = sessionStorage.getItem(`loopsight_job_result_${id}`);
-      if (cached) {
-        try {
-          const parsed = JSON.parse(cached);
-          setResult(parsed);
-          setLoading(false);
-        } catch {}
-      }
+      setUserCustomImage(customImg || null);
+
     }
   }, [id]);
 
@@ -214,6 +208,10 @@ export default function JobPage() {
   }, [secondCameraStream]);
 
   useEffect(() => {
+    setLoading(true);
+    setCaptureUnavailable(false);
+    setError(null);
+    setResult(null);
     let cancelled = false;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     let elapsedTimer: ReturnType<typeof setInterval> | null = null;
@@ -224,7 +222,11 @@ export default function JobPage() {
     const fetchJob = async () => {
       try {
         const r = await fetch(`/api/jobs/${id}`, { cache: "no-store" });
-        if (!r.ok) throw new Error("Job not found");
+        if (!r.ok) {
+          const error = await r.json().catch(() => null);
+          throw new Error(r.status === 404 ? "Job not found" : typeof error?.detail === "string"
+            ? error.detail : "The inspection could not be loaded. Please retry.");
+        }
         const data = await r.json();
         if (cancelled) return;
         const status = (data as any).status;
@@ -316,7 +318,8 @@ export default function JobPage() {
       doc.text(`Job ID: ${id} | Profile: ${result.inspection_profile || "water_turbidity_v1"}`, 14, 28);
       doc.text(`Generated: ${now} | First-Pass Status: ${result.status}`, 14, 34);
       doc.setFontSize(8);
-      doc.text(`Execution: ${result.provenance?.execution_mode || "unverified legacy"} | Physical NTU/mm units are unvalidated.`, 14, 40);
+      doc.text(`Execution: ${result.provenance?.execution_mode || "unverified legacy"} | Image units only; no calibrated physical measurements.`, 14, 40);
+      doc.text(`Observations used: ${result.acquisition?.observations_used ?? "unverified"} | Additional analysis: ${result.second_pass?.evidence_source || "none recorded"}`, 14, 45);
       doc.setTextColor(0);
       doc.setFontSize(12);
       doc.text("1. First-Pass OpenCV 5 Telemetry", 14, 50);
@@ -327,9 +330,9 @@ export default function JobPage() {
         const line1 = `Region ${i + 1} (${r.x},${r.y} ${r.w}x${r.h}): edge=${ev.edge_continuity.toFixed(3)} contrast=${(ev.local_contrast ?? 0).toFixed(3)} glare=${((ev.glare_ratio ?? 0) * 100).toFixed(1)}%`;
         const line2 =
           ev.pattern_visibility !== undefined
-            ? `  Water Nephelometry: pattern_visibility=${ev.pattern_visibility.toFixed(3)} sharpness=${(ev.pattern_sharpness ?? 0).toFixed(3)} strat_delta=${(ev.stratification_delta ?? 0).toFixed(3)} NTU=${(ev.estimated_ntu ?? 0).toFixed(1)}`
-            : ev.crack_width_mm !== undefined
-            ? `  Crack Metrology: width=${ev.crack_width_mm.toFixed(3)}mm length=${(ev.crack_length_px ?? 0).toFixed(1)}px severity=${(ev.crack_severity_score ?? 0).toFixed(3)}`
+            ? `  Water Nephelometry: pattern_visibility=${ev.pattern_visibility.toFixed(3)} sharpness=${(ev.pattern_sharpness ?? 0).toFixed(3)} strat_delta=${(ev.stratification_delta ?? 0).toFixed(3)}`
+            : ev.crack_width_px !== undefined
+            ? `  Crack Metrology: width=${ev.crack_width_px.toFixed(3)}px length=${(ev.crack_length_px ?? 0).toFixed(1)}px severity=${(ev.crack_severity_score ?? 0).toFixed(3)}`
             : "";
         doc.text(line1, 14, yPos);
         yPos += 6;
@@ -465,16 +468,22 @@ export default function JobPage() {
       const isWater = isWaterResult(result);
       form.append("inspection_profile", isWater ? "water_turbidity_v1" : result.inspection_profile || "fdm_print_surface_v1");
       const res = await fetch("/api/inspect", { method: "POST", body: form });
-      if (!res.ok) throw new Error("Second look failed");
+      if (!res.ok) {
+        const error = await res.json().catch(() => null);
+        throw new Error(typeof error?.detail === "string" ? error.detail : "The second capture could not be used. Please retry.");
+      }
       const { job_id } = await res.json();
-      toast.success("Second lighting submitted — evaluating dual-look...");
+      if (userCustomImage) {
+        try { sessionStorage.setItem(`loopsight_user_img_${job_id}`, userCustomImage); } catch {}
+      }
+      toast.success("Second capture analyzed");
       router.push(`/job/${job_id}`);
     } catch (e: any) {
       setSecondError(e.message || "Failed to submit second photo.");
       toast.error("Failed to submit second photo.");
       setSecondUploading(false);
     }
-  }, [secondFile, secondLighting, result, id, router]);
+  }, [secondFile, secondLighting, result, id, router, userCustomImage]);
 
   if (loading || polling) {
     return (
@@ -532,9 +541,9 @@ export default function JobPage() {
       icon: <CheckCircle2 className="h-8 w-8 text-[#22c55e]" />,
       label: "PASS",
       banner: water
-        ? "NO VISIBLE TURBIDITY DETECTED (CLEAR SAMPLE)"
+        ? "HIGH PATTERN VISIBILITY — NOT A WATER SAFETY TEST"
         : crack
-        ? "NO STRUCTURAL FRACTURE DETECTED (CLEARED ARTIFACT)"
+        ? "NO STRONG CRACK-LIKE FEATURE DETECTED"
         : "CONFIDENT PASS — NO DEFECT DETECTED",
     },
     FAIL: {
@@ -545,9 +554,9 @@ export default function JobPage() {
       icon: <XCircle className="h-8 w-8 text-[#ef4444]" />,
       label: "FAIL",
       banner: water
-        ? "VISIBLE TURBIDITY DETECTED (CONTAMINATED SAMPLE)"
+        ? "LOW PATTERN VISIBILITY — REVIEW SAMPLE"
         : crack
-        ? `STRUCTURAL FRACTURE DETECTED (${(result.regions[0]?.evidence.crack_width_mm ?? 0.719).toFixed(3)} mm)`
+        ? "CRACK-LIKE IMAGE FEATURE DETECTED — REVIEW REQUIRED"
         : "DEFECT SIGNAL CONFIRMED",
     },
     REVIEW: {
@@ -577,28 +586,14 @@ export default function JobPage() {
   const primaryEvidence = primaryRegion?.evidence;
   const patternVis = primaryEvidence?.pattern_visibility ?? primaryEvidence?.edge_continuity ?? 0;
   const secondVis = result.second_pass?.regions[0]?.pattern_visibility ?? result.second_pass?.regions[0]?.edge_continuity;
-  const estimatedNtu =
-    primaryEvidence?.estimated_ntu ??
-    (patternVis > 0 ? Math.max(0.1, 3.5 * Math.pow(Math.max(0.001, 1 / patternVis - 1), 1.15)) : 18.5);
-
-  const whoTier =
-    primaryEvidence?.who_tier ||
-    (patternVis >= 0.85 ? "PRISTINE" : patternVis >= 0.55 ? "ACCEPTABLE" : "ELEVATED_TURBIDITY");
-
-  // Governing resolved metrics across passes
-  const resolvedVis = secondVis !== undefined ? secondVis : patternVis;
-  const resolvedNtu =
-    secondVis !== undefined
-      ? (resolvedVis > 0 ? Math.max(0.1, 3.5 * Math.pow(Math.max(0.001, 1 / resolvedVis - 1), 1.15)) : 18.5)
-      : estimatedNtu;
-  const resolvedWhoTier =
-    decision === "NO_PATTERN_DETECTED"
-      ? "TARGET_MISSING"
-      : resolvedVis >= 0.85
-      ? "PRISTINE"
-      : resolvedVis >= 0.55
-      ? "ACCEPTABLE"
-      : "ELEVATED_TURBIDITY";
+  const recaptured = result.second_pass?.evidence_source === "new_capture";
+  const resolvedVis = recaptured && secondVis !== undefined ? secondVis : patternVis;
+  const evidenceAccessible = result.capture_session?.evidence_available && !captureUnavailable
+    && (!result.capture_session.expires_at || Date.now() < Date.parse(result.capture_session.expires_at));
+  const rawImageSource = evidenceAccessible
+    ? `/api/jobs/${encodeURIComponent(id)}/captures/0` : userCustomImage;
+  const secondImageSource = secondPreview || (evidenceAccessible && result.acquisition?.new_capture_used
+    ? `/api/jobs/${encodeURIComponent(id)}/captures/1` : null);
 
   return (
     <div className="min-h-screen bg-[#070d18] text-[#e6f0ff] relative overflow-hidden flex flex-col">
@@ -688,7 +683,7 @@ export default function JobPage() {
                     {decStyle.label}
                   </span>
                   <span className="text-xs font-mono uppercase px-2.5 py-0.5 rounded-full bg-[#070d18]/70 border border-white/10 text-white font-semibold">
-                    {result.final_decision.confidence_band} Confidence
+                    {result.final_decision.confidence_band} Heuristic Evidence
                   </span>
                 </div>
                 <h2 className="text-base md:text-lg font-bold text-white tracking-wide">
@@ -699,27 +694,27 @@ export default function JobPage() {
                     decision === "NO_PATTERN_DETECTED" ? (
                       <span>
                         OpenCV did not detect a high-contrast calibration checkerboard grid behind the sample. Optical nephelometry requires observing pattern attenuation through liquid against a known spatial reference.{" "}
-                        <strong className="text-white">To inspect:</strong> Position a printed checkerboard pattern behind the liquid glass, or test with our calibrated benchmark presets.
+                        <strong className="text-white">To inspect:</strong> Position a printed checkerboard pattern behind the liquid glass, or test with our synthetic benchmark presets.
                       </span>
                     ) : decision === "PASS" ? (
                       <span>
-                        Optical pattern clarity through water sample meets drinking water nephelometry standard (&ge;0.55).{" "}
+                        Pattern visibility exceeds the current image-screening threshold. This is a dimensionless image score, not a drinking-water standard.{" "}
                         <strong className="text-white">Notice:</strong> Does not verify invisible chemical contaminants (arsenic/fluoride).
                       </span>
                     ) : (
                       <span>
-                        Visible turbidity detected. The sample obscures the optical checkerboard pattern.{" "}
-                        <strong className="text-[#fca5a5]">Do not consume without certified filtration or treatment.</strong>
+                        The image does not provide a confidently clear view of the checkerboard. Lighting, focus, glare and the sample can affect this score.{" "}
+                        <strong className="text-[#fca5a5]">Use a certified water test to assess safety.</strong>
                       </span>
                     )
                   ) : crack ? (
                     decision === "PASS" ? (
                       <span>
-                        Surface shadow or illumination artifact resolved by second-pass homomorphic normalization (&lt;0.15mm threshold).
+                        No strong crack-like feature remains under the current image-space heuristic. This does not establish structural safety.
                       </span>
                     ) : (
                       <span>
-                        Structural concrete fracture confirmed (&ge;0.400mm civil engineering threshold). Structural engineering follow-up required.
+                        The image contains a crack-like line feature. Pixel measurements do not establish its physical width or structural significance; seek qualified inspection.
                       </span>
                     )
                   ) : (
@@ -783,7 +778,7 @@ export default function JobPage() {
                 >
                   Raw Input
                 </button>
-                {secondVis !== undefined && (
+                {recaptured && secondVis !== undefined && (
                   <button
                     type="button"
                     onClick={() => setActiveOverlayLayer("second")}
@@ -884,7 +879,7 @@ export default function JobPage() {
                         </div>
                       </div>
                     </motion.div>
-                  ) : activeOverlayLayer === "second" && secondPreview ? (
+                  ) : activeOverlayLayer === "second" && secondImageSource ? (
                     <motion.div
                       key="second"
                       initial={{ opacity: 0 }}
@@ -893,8 +888,9 @@ export default function JobPage() {
                       className="relative w-full h-full flex items-center justify-center"
                     >
                       <img
-                        src={secondPreview}
-                        alt="Second Lighting Frame"
+                        src={secondImageSource}
+                        alt="Retained second capture"
+                        onError={() => setCaptureUnavailable(true)}
                         className="max-h-full max-w-full object-contain rounded-xl border border-white/10 shadow-2xl"
                       />
                     </motion.div>
@@ -906,12 +902,13 @@ export default function JobPage() {
                       exit={{ opacity: 0 }}
                       className="relative w-full h-full flex items-center justify-center"
                     >
-                      {/* If custom user image exists, show that for raw ingest; otherwise sample fallback */}
-                      <img
-                        src={userCustomImage || result.overlay_data_url || "/samples/water_glare_confounded.png"}
-                        alt="Raw Ingest Frame"
-                        className="max-h-full max-w-full object-contain rounded-xl border border-white/10 shadow-2xl"
-                      />
+                      {rawImageSource ? (
+                        <img src={rawImageSource} alt="Original analysis-space capture"
+                          onError={() => setCaptureUnavailable(true)}
+                          className="max-h-full max-w-full object-contain rounded-xl border border-white/10 shadow-2xl" />
+                      ) : (
+                        <p className="text-sm text-[#8aa0c0]">The original capture is not retained for this result. The diagnostic tab contains the recorded overlay.</p>
+                      )}
                     </motion.div>
                   )}
                 </AnimatePresence>
@@ -962,15 +959,15 @@ export default function JobPage() {
 
           {/* RIGHT: Physical Metrology Telemetry Matrix (5 Cols) */}
           <div className="lg:col-span-5 space-y-4">
-            {/* Primary Physical Nephelometry Card */}
+            {/* Primary image-space measurement card */}
             <div className="glass-studio rounded-2xl p-5 space-y-4">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold uppercase tracking-wide text-[#8aa0c0] flex items-center gap-1.5">
                   <Droplets className="h-4 w-4 text-[#38bdf8]" />
-                  Physical Optical Telemetry
+                  Image-space measurements
                 </span>
                 <span className="text-[11px] font-mono text-[#38bdf8] bg-[#38bdf8]/10 px-2 py-0.5 rounded border border-[#38bdf8]/20">
-                  Beer-Lambert Calibrated
+                  Relative image scores
                 </span>
               </div>
 
@@ -982,14 +979,14 @@ export default function JobPage() {
                       label={
                         decision === "NO_PATTERN_DETECTED"
                           ? "Target Required"
-                          : secondVis !== undefined
+                          : recaptured && secondVis !== undefined
                           ? "Resolved Visibility"
                           : "Pattern Visibility"
                       }
                       sublabel={
                         decision === "NO_PATTERN_DETECTED"
                           ? "Calibration Target Missing"
-                          : secondVis !== undefined
+                          : recaptured && secondVis !== undefined
                           ? "Pass 2 Active Perception"
                           : "Optical transmission v"
                       }
@@ -997,38 +994,16 @@ export default function JobPage() {
 
                     <div className="grid grid-cols-2 gap-2.5 flex-1 min-w-[200px]">
                       <div className="p-3 rounded-xl bg-[#070d18]/80 border border-[#163256]">
-                        <span className="text-[10px] font-mono uppercase text-[#8aa0c0] block">Illustrative NTU (uncalibrated)</span>
+                        <span className="text-[10px] font-mono uppercase text-[#8aa0c0] block">Visibility score</span>
                         <span className="text-xl font-extrabold font-mono text-white block mt-0.5">
-                          {decision === "NO_PATTERN_DETECTED" ? "N/A" : resolvedNtu.toFixed(1)}{" "}
-                          {decision !== "NO_PATTERN_DETECTED" && <span className="text-xs font-normal text-[#8aa0c0]">NTU</span>}
+                          {decision === "NO_PATTERN_DETECTED" ? "N/A" : resolvedVis.toFixed(3)}
                         </span>
-                        <span className="text-[9px] text-[#38bdf8] block mt-0.5 font-mono">
-                          {decision === "NO_PATTERN_DETECTED"
-                            ? "Target Grid Missing"
-                            : secondVis !== undefined
-                            ? "Pass 2 (< 1.0 Pristine)"
-                            : "Physical calibration required"}
-                        </span>
+                        <span className="text-[9px] text-[#8aa0c0] block mt-0.5">Dimensionless · 0 to 1</span>
                       </div>
-
                       <div className="p-3 rounded-xl bg-[#070d18]/80 border border-[#163256]">
-                        <span className="text-[10px] font-mono uppercase text-[#8aa0c0] block">Illustrative tier (unvalidated)</span>
-                        <span
-                          className={`text-sm font-extrabold font-mono block mt-1 ${
-                            decision === "NO_PATTERN_DETECTED"
-                              ? "text-[#f59e0b]"
-                              : resolvedWhoTier === "PRISTINE"
-                              ? "text-[#22c55e]"
-                              : resolvedWhoTier === "ACCEPTABLE"
-                              ? "text-[#38bdf8]"
-                              : "text-[#ef4444]"
-                          }`}
-                        >
-                          {decision === "NO_PATTERN_DETECTED" ? "TARGET MISSING" : resolvedWhoTier}
-                        </span>
-                        <span className="text-[9px] text-[#8aa0c0] block mt-0.5 font-mono">
-                          {decision === "NO_PATTERN_DETECTED" ? "Analysis Halted" : "IS 10500:2012"}
-                        </span>
+                        <span className="text-[10px] font-mono uppercase text-[#8aa0c0] block">Measurement scope</span>
+                        <span className="text-sm font-bold text-[#f59e0b] block mt-1">Relative image screening</span>
+                        <span className="text-[9px] text-[#8aa0c0] block mt-0.5">Physical turbidity calibration unavailable</span>
                       </div>
 
                       <div className="p-3 rounded-xl bg-[#070d18]/80 border border-[#163256]">
@@ -1060,11 +1035,11 @@ export default function JobPage() {
                   <div className="p-3.5 rounded-xl bg-[#070d18]/80 border border-[#163256]">
                     <span className="text-[10px] font-mono uppercase text-[#8aa0c0] block">Fracture Width</span>
                     <span className="text-2xl font-extrabold font-mono text-white block mt-1">
-                      {(primaryEvidence?.crack_width_mm ?? 0).toFixed(3)}{" "}
-                      <span className="text-xs text-[#8aa0c0]">mm</span>
+                      {primaryEvidence?.crack_width_px !== undefined ? primaryEvidence.crack_width_px.toFixed(2) : "—"}{" "}
+                      <span className="text-xs text-[#8aa0c0]">px</span>
                     </span>
                     <span className="text-[10px] text-[#ef4444] font-mono block mt-0.5">
-                      Fail Threshold &ge; 0.400 mm
+                      Analysis-image pixels · no physical scale
                     </span>
                   </div>
 
@@ -1149,7 +1124,7 @@ export default function JobPage() {
                 </div>
 
                 {/* Second-Look Evidence Comparison */}
-                {secondVis !== undefined && (
+                {recaptured && secondVis !== undefined && (
                   <div className="rounded-xl bg-[#22c55e]/10 border border-[#22c55e]/30 p-3.5 space-y-2.5 text-xs font-mono">
                     <div className="flex items-center justify-between">
                       <span className="text-[#38bdf8] font-bold text-[11px] uppercase tracking-wide">
@@ -1163,7 +1138,7 @@ export default function JobPage() {
                       <div className="p-2 rounded bg-[#070d18] border border-white/5">
                         <span className="text-[#8aa0c0] block text-[9px]">LOOK 1 (INITIAL)</span>
                         <span className="text-sm font-bold text-[#f59e0b]">{(patternVis * 100).toFixed(0)}%</span>
-                        <span className="text-[9px] text-[#8aa0c0] block">{estimatedNtu.toFixed(1)} NTU</span>
+                        <span className="text-[9px] text-[#8aa0c0] block">Image visibility score</span>
                       </div>
                       <div className="p-2 rounded bg-[#070d18] border border-white/5 flex flex-col justify-center items-center">
                         <span className="text-[#8aa0c0] block text-[9px]">INTERVENTION</span>
@@ -1177,7 +1152,7 @@ export default function JobPage() {
                       <div className="p-2 rounded bg-[#070d18] border border-white/5">
                         <span className="text-[#8aa0c0] block text-[9px]">LOOK 2 (RESOLVED)</span>
                         <span className="text-sm font-bold text-[#22c55e]">{(secondVis * 100).toFixed(0)}%</span>
-                        <span className="text-[9px] text-[#22c55e] block">{resolvedNtu.toFixed(1)} NTU</span>
+                        <span className="text-[9px] text-[#22c55e] block">Image visibility score</span>
                       </div>
                     </div>
                   </div>
@@ -1195,7 +1170,7 @@ export default function JobPage() {
                   </h4>
                 </div>
                 <p className="text-xs text-[#cbd5e1] leading-relaxed">
-                  Unlike opaque image classifiers, LoopSight measures <em>physical light attenuation</em> (Beer-Lambert law) by computing contrast degradation of a known checkerboard grid through liquid. Without an optical target, the policy safely halts analysis.
+                  LoopSight measures image contrast, sharpness and edge visibility around a checkerboard target. These are relative image features, not calibrated physical turbidity measurements. Without a reference target, the policy declines to classify the sample.
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
                   <a
@@ -1207,27 +1182,37 @@ export default function JobPage() {
                     <Download className="h-3.5 w-3.5" /> Download A4 Target Grid
                   </a>
                   <Link
-                    href="/job/water_glare_confounded"
+                    href="/"
                     className="p-2.5 rounded-xl bg-[#070d18] hover:bg-[#163256] border border-[#163256] hover:border-[#22c55e]/40 text-xs text-[#22c55e] font-bold flex items-center justify-center gap-1.5 transition-all"
                   >
-                    <CheckCircle2 className="h-3.5 w-3.5" /> Test Calibrated Water Lab
+                    <CheckCircle2 className="h-3.5 w-3.5" /> View synthetic scenarios
                   </Link>
                 </div>
               </div>
             )}
 
             {/* Optional Second-Look Interactive Upload (When UNCERTAIN) */}
-            {water && result.status === "UNCERTAIN" && (
+            {water && result.capture_session?.can_recapture && !evidenceAccessible && (
+              <div role="status" className="glass-studio rounded-2xl p-5 text-sm text-[#fcd34d]">
+                The retained first capture is unavailable or expired. <Link href="/" className="underline">Start a new inspection</Link> to capture fresh evidence.
+              </div>
+            )}
+            {water && result.capture_session?.can_recapture && evidenceAccessible && (
               <div className="glass-studio rounded-2xl p-5 space-y-3 border-[#f59e0b]/40 glow-amber">
                 <div className="flex items-center gap-2">
                   <Sun className="h-5 w-5 text-[#f59e0b]" />
                   <div>
                     <h4 className="text-xs font-bold text-white uppercase">Supply Second Photo (Different Lighting)</h4>
                     <p className="text-[11px] text-[#f59e0b]">
-                      Run cross-frame sub-pixel persistence via track_across_frames([frame1, frame2])
+                      Keep the same sample and framing; change only the lighting and take a new photo.
                     </p>
                   </div>
                 </div>
+
+                <ol className="list-decimal pl-4 text-xs text-[#cbd5e1] space-y-1">
+                  {result.capture_session.instructions.map((step) => <li key={step}>{step}</li>)}
+                </ol>
+                {result.capture_session.expires_at && <p className="text-xs text-[#8aa0c0]">Capture access expires at {new Date(result.capture_session.expires_at).toLocaleTimeString()}.</p>}
 
                 {secondError && (
                   <div className="p-2 rounded bg-[#ef4444]/20 border border-[#ef4444]/40 text-xs text-[#fca5a5]">
@@ -1242,7 +1227,7 @@ export default function JobPage() {
                     className="h-9 rounded-lg border border-[#163256] bg-[#070d18] text-white text-xs px-2.5 flex-1 font-mono"
                   >
                     <option value="backlight">Backlight (behind sample)</option>
-                    <option value="ambient">Ambient light</option>
+                    <option value="side_light">Light moved to the side</option>
                     <option value="flash">Flashlight / Torch</option>
                   </select>
 

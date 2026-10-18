@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getJob } from "@/lib/mock-data";
 import { proxyInference } from "@/lib/inference";
+import { MEASUREMENT_CONTRACT } from "@/lib/measurements";
 
 export async function GET(
   _request: Request,
@@ -14,6 +15,7 @@ export async function GET(
     }
     return NextResponse.json({
       ...job.result,
+      measurement_contract: MEASUREMENT_CONTRACT,
       provenance: { execution_mode: "demo_fixture" },
     });
   }

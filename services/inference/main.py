@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import platform
+import sqlite3
 import sys
 import time
 import uuid
@@ -70,9 +71,11 @@ from fastapi.responses import JSONResponse, Response
 from cv.first_pass import run_first_pass, PROFILES  # type: ignore
 from cv.tools import TOOL_REGISTRY  # type: ignore
 from cv.policy import decide  # type: ignore
-from agent.tool_selector import select_tool, MCP_TOOL_DESCRIPTORS, ALLOWED_TOOLS  # type: ignore
+from agent.tool_selector import select_tool, ToolCall, MCP_TOOL_DESCRIPTORS, ALLOWED_TOOLS  # type: ignore
 from storage import create_job_store, InMemoryJobStore  # type: ignore
 import demo_golden  # type: ignore
+from evidence import MEASUREMENT_CONTRACT
+from capture_sessions import SqliteCaptureSessionStore, CaptureSessionError, frame_digest, validate_capture_pair
 
 app = FastAPI(title="LoopSight v2 Active-Perception Inference & MCP Server", version="0.2.0")
 
@@ -105,13 +108,20 @@ async def request_id_middleware(request: Request, call_next):
 
 
 JOBS: Dict[str, dict] = {}
-FRAME_CACHE: Dict[str, dict] = {}
-FRAME_SEQ_COUNTER = 0
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_PIXELS = 25_000_000  # 25 MP pixel-bomb guard
 
 store = create_job_store(JOBS)
+capture_store = SqliteCaptureSessionStore(
+    os.environ.get("LOOPSIGHT_CAPTURE_DB_PATH") or os.environ.get("LOOPSIGHT_SQLITE_PATH") or "/tmp/loopsight_jobs.sqlite3",
+    ttl_seconds=int(os.environ.get("LOOPSIGHT_CAPTURE_TTL_SECONDS", "1800")),
+)
+
+
+@app.exception_handler(CaptureSessionError)
+async def capture_session_error(_request: Request, error: CaptureSessionError):
+    return JSONResponse({"detail": str(error)}, status_code=error.status_code)
 
 
 def _decode_image(data: bytes) -> np.ndarray:
@@ -236,7 +246,7 @@ def _fixture_for_first_pass(first_pass) -> dict:
     if ("crack" in gap_str or "hairline" in gap_str or "skeleton" in gap_str) and "skeletonize_crack_metrology" in allowed:
         return {
             "tool": "skeletonize_crack_metrology",
-            "arguments": {"mm_per_px": 0.10},
+            "arguments": {},
             "reason_code": "SHADOW_VS_FRACTURE_METROLOGY",
         }
 
@@ -273,7 +283,7 @@ def _fixture_for_first_pass(first_pass) -> dict:
     # 9. Low local contrast
     if "low local contrast" in gap_str or "illumination contrast" in gap_str:
         if "skeletonize_crack_metrology" in allowed and "illumination contrast" in gap_str:
-            return {"tool": "skeletonize_crack_metrology", "arguments": {"mm_per_px": 0.10}, "reason_code": "LOW_SURFACE_CONTRAST"}
+            return {"tool": "skeletonize_crack_metrology", "arguments": {}, "reason_code": "LOW_SURFACE_CONTRAST"}
         if "reinspect_roi" in allowed:
             return {"tool": "reinspect_roi", "arguments": {"scale": 2.0}, "reason_code": "INSUFFICIENT_LOCAL_CONTRAST"}
         if "measure_edge_continuity" in allowed:
@@ -343,8 +353,7 @@ def _run_tool(
     elif tool_name == "analyze_vertical_stratification":
         return fn(frame, roi)
     elif tool_name == "skeletonize_crack_metrology":
-        mm_per_px = float(args.get("mm_per_px", 0.10))
-        return fn(frame, roi, mm_per_px=mm_per_px)
+        return fn(frame, roi)
     else:
         try:
             return fn(frame, reference, roi, **args)
@@ -377,6 +386,7 @@ async def health_alt():
 
 
 BUILD_TIMESTAMP = datetime.datetime.now(datetime.timezone.utc).isoformat()
+RUNTIME_INSTANCE_ID = uuid.uuid4().hex
 
 
 @app.get("/version")
@@ -385,7 +395,11 @@ async def version():
     gemini_model = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
     return {
         "opencv_version": cv2.__version__,
+        "measurement_contract": MEASUREMENT_CONTRACT,
         "python_version": platform.python_version(),
+        "runtime_architecture": platform.machine(),
+        "runtime_instance_id": RUNTIME_INSTANCE_ID,
+        "instance_started_at": BUILD_TIMESTAMP,
         "profile_names": sorted(PROFILES.keys()),
         "allowed_tools": sorted(ALLOWED_TOOLS),
         "mcp_tools_count": len(MCP_TOOL_DESCRIPTORS),
@@ -525,15 +539,15 @@ async def mcp_json_rpc(request: Request):
                     raise ValueError("second image exceeds upload limit")
                 second_bytes = base64.b64decode(second_b64, validate=True)
                 second_frame = _decode_image(second_bytes)
-                if second_frame.shape == frame.shape and np.array_equal(frame, second_frame):
-                    raise ValueError("second captured image must differ from the first")
-                tool_res = fn([frame, second_frame], roi)
+                aligned_second, pair_report = validate_capture_pair(frame, second_frame)
+                x, y, width, height = pair_report["crop"]
+                tool_res = fn([frame[y:y + height, x:x + width], aligned_second], (0, 0, width, height))
             elif tool_name in ("reinspect_roi", "compare_to_reference"):
                 tool_res = fn(frame, None, roi)
             elif tool_name == "inpaint_specular_glare":
                 tool_res = fn(frame, roi, radius=float(args.get("radius", 5.0)))
             elif tool_name == "skeletonize_crack_metrology":
-                tool_res = fn(frame, roi, mm_per_px=float(args.get("mm_per_px", 0.10)))
+                tool_res = fn(frame, roi)
             elif tool_name == "measure_edge_continuity":
                 tool_res = fn(frame, roi, low=int(args.get("low", 30)), high=int(args.get("high", 100)))
             else:
@@ -541,14 +555,13 @@ async def mcp_json_rpc(request: Request):
 
             reg = tool_res.region
             telemetry = {
+                "measurement_contract": MEASUREMENT_CONTRACT,
                 "execution_mode": "live_opencv" if image_b64 is not None else "synthetic_benchmark",
                 "measurement_basis": "uncalibrated_image_heuristics",
                 "tool": tool_res.tool,
                 "notes": tool_res.notes,
                 "pattern_visibility": round(float(getattr(reg, "pattern_visibility", 0.0)), 4),
-                "estimated_ntu": round(float(getattr(reg, "estimated_ntu", 0.0)), 2),
-                "who_tier": str(getattr(reg, "who_tier", "PRISTINE")),
-                "crack_width_mm": round(float(getattr(reg, "crack_width_mm", 0.0)), 3),
+                "crack_width_px": round(float(getattr(reg, "crack_width_px", 0.0)), 3),
                 "glare_ratio": round(float(getattr(reg, "glare_ratio", 0.0)), 4),
             }
             return JSONResponse({
@@ -575,15 +588,15 @@ async def mcp_json_rpc(request: Request):
 
 
 # ---------------------------------------------------------------------------
-# Built-in Physics-Calibrated Benchmark Sample Catalog (1-click Judge Test Bench)
+# Generated synthetic regression scenarios (not physical validation)
 # ---------------------------------------------------------------------------
 SAMPLE_CATALOG = [
     {
         "id": "water_glare_confounded",
         "title": "Clear Water + Specular Glass Glare",
         "profile": "water_turbidity_v1",
-        "description": "Clear potable-clarity water sample where a curved-glass reflection (glare_ratio ~10%) washes out first-pass visibility into UNCERTAIN. Agent invokes inpaint_specular_glare (cv2.inpaint + CLAHE) to recover PASS.",
-        "expected_flow": "UNCERTAIN -> inpaint_specular_glare -> PASS",
+        "description": "Generated glare over a checkerboard. Processing can improve image scores but does not supply a new observation; the result remains REVIEW.",
+        "expected_flow": "UNCERTAIN -> same-image diagnosis -> REVIEW (new capture required)",
     },
     {
         "id": "water_stratified_sediment",
@@ -610,15 +623,15 @@ SAMPLE_CATALOG = [
         "id": "crack_shadow_confounded",
         "title": "Intact Concrete Wall + Cast Shadow",
         "profile": "structural_crack_metrology_v1",
-        "description": "Intact concrete with a diagonal shadow gradient that mimics a hairline crack on Pass 1. Agent invokes skeletonize_crack_metrology (homomorphic shadow removal + distance transform) to confirm 0.00mm PASS.",
+        "description": "Generated shadow-like gradient. Illumination normalization reduces the crack-like line score; widths are in image pixels without physical scale.",
         "expected_flow": "UNCERTAIN -> skeletonize_crack_metrology -> PASS",
     },
     {
         "id": "crack_structural_fail",
-        "title": "Structural Concrete Fracture (0.60mm)",
+        "title": "Synthetic Crack-Like Line",
         "profile": "structural_crack_metrology_v1",
-        "description": "Concrete surface with a continuous ~0.60mm structural crack measured via morphological black-hat and Euclidean distance transform (cv2.distanceTransform).",
-        "expected_flow": "CONFIDENT_FAIL -> FAIL (width >= 0.40mm)",
+        "description": "Generated line texture measured with a distance transform in analysis-image pixels. This is not a physical crack-width measurement.",
+        "expected_flow": "CONFIDENT_FAIL -> FAIL (image-space screening)",
     },
 ]
 
@@ -667,6 +680,7 @@ def _execute_inspection_pipeline(
     original_job_id: Optional[str] = None,
     decode_ms: float = 0.5,
     execution_mode: str = "live_opencv",
+    first_capture_metadata: Optional[dict] = None,
 ) -> tuple[str, dict]:
     """Shared real OpenCV 5 + Agent + Policy execution pipeline used by both
     POST /inspect and POST /inspect/sample/{sample_id}."""
@@ -678,12 +692,12 @@ def _execute_inspection_pipeline(
     h, w = frame.shape[:2]
     roi = (0, 0, w, h)
 
-    first_frame_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    first_capture_metadata = first_capture_metadata or {}
+    first_frame_timestamp = first_capture_metadata.get("timestamp") or datetime.datetime.now(datetime.timezone.utc).isoformat()
     second_frame_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat() if second_frame is not None else None
-    global FRAME_SEQ_COUNTER
-    FRAME_SEQ_COUNTER += 1
-    first_seq = FRAME_SEQ_COUNTER
-    second_seq = FRAME_SEQ_COUNTER + 1 if second_frame is not None else None
+    first_seq, second_seq = 1, 2
+    pair_validation = None
+    independent_capture_used = False
 
     t0 = time.perf_counter()
     first_pass = run_first_pass(frame, reference, [roi], profile_name=profile_name)
@@ -698,7 +712,10 @@ def _execute_inspection_pipeline(
     if first_pass.status == "UNCERTAIN":
         t_agent = time.perf_counter()
         gemini_key = os.environ.get("GEMINI_API_KEY")
-        if gemini_key:
+        if second_frame is not None and profile_name == "water_turbidity_v1":
+            tool_call = ToolCall("track_across_frames", {}, "NEW_CAPTURE_AVAILABLE", ["track_across_frames"])
+            gemini_key = None
+        elif gemini_key:
             tool_call = select_tool(first_pass, api_key=gemini_key)
         else:
             fixture = _fixture_for_first_pass(first_pass)
@@ -712,65 +729,26 @@ def _execute_inspection_pipeline(
             "reason_code": tool_call.reason_code,
         }
 
-        real_two_frame = False
-        frames_for_track: Optional[list] = None
-        frame_metas: Optional[list] = None
-
-        if second_frame is not None:
-            if original_job_id and original_job_id in FRAME_CACHE:
-                cached = FRAME_CACHE[original_job_id]
-                frames_for_track = [cached["frame"], second_frame]
-                frame_metas = [
-                    {"seq": cached["seq"], "timestamp": cached["timestamp"], "lighting": cached.get("lighting", "ambient")},
-                    {"seq": second_seq if second_seq else FRAME_SEQ_COUNTER + 1, "timestamp": second_frame_timestamp or first_frame_timestamp, "lighting": second_frame_lighting},
-                ]
-                real_two_frame = True
-            else:
-                frames_for_track = [frame, second_frame]
-                frame_metas = [
-                    {"seq": first_seq, "timestamp": first_frame_timestamp, "lighting": first_lighting},
-                    {"seq": second_seq if second_seq else first_seq + 1, "timestamp": second_frame_timestamp or first_frame_timestamp, "lighting": second_frame_lighting},
-                ]
-                real_two_frame = True
-        elif original_job_id and original_job_id in FRAME_CACHE and second_frame is None:
-            cached = FRAME_CACHE[original_job_id]
-            frames_for_track = [cached["frame"], frame]
-            frame_metas = [
-                {"seq": cached["seq"], "timestamp": cached["timestamp"], "lighting": cached.get("lighting", "ambient")},
-                {"seq": first_seq, "timestamp": first_frame_timestamp, "lighting": second_frame_lighting},
-            ]
-            real_two_frame = True
-
-        if real_two_frame and frames_for_track is not None:
-            if "track_across_frames" in first_pass.allowed_tools:
-                if tool_call.tool != "track_across_frames":
-                    tool_call = type(tool_call)(
-                        tool="track_across_frames",
-                        arguments={},
-                        reason_code="BORDERLINE_TWO_LIGHTINGS_DIFFERENT_LIGHTING_AVAILABLE",
-                    )
-                    agent_call_dict = {"tool": tool_call.tool, "reason_code": tool_call.reason_code,
-                                       "selector": "deterministic_policy"}
-                frame_info_for_result = frame_metas
-                if second_seq:
-                    FRAME_SEQ_COUNTER = max(FRAME_SEQ_COUNTER, second_seq)
-            else:
-                real_two_frame = False
-                frames_for_track = None
-                frame_metas = None
-
         t_sp = time.perf_counter()
-        try:
-            if real_two_frame and frames_for_track is not None:
-                fn = TOOL_REGISTRY["track_across_frames"]
-                tool_result = fn(frames_for_track, roi)
-                if frame_metas:
-                    tool_result.notes += f" | frames {frame_metas[0]['seq']}@{frame_metas[0]['timestamp']} ({frame_metas[0]['lighting']}) -> {frame_metas[1]['seq']}@{frame_metas[1]['timestamp']} ({frame_metas[1]['lighting']})"
-            else:
+        if second_frame is not None and profile_name == "water_turbidity_v1":
+            aligned_second, pair_validation = validate_capture_pair(frame, second_frame)
+            x, y, cw, ch = pair_validation["crop"]
+            first_crop = frame[y:y + ch, x:x + cw]
+            tool_result = TOOL_REGISTRY["track_across_frames"]([first_crop, aligned_second], (0, 0, cw, ch))
+            independent_capture_used = True
+            frame_info_for_result = [
+                {"seq": 1, "timestamp": first_frame_timestamp, "lighting": first_lighting,
+                 "sha256": frame_digest(frame), "sha256_basis": "decoded_analysis_pixels", "timestamp_source": "server_received"},
+                {"seq": 2, "timestamp": second_frame_timestamp, "lighting": second_frame_lighting,
+                 "sha256": frame_digest(second_frame), "sha256_basis": "decoded_analysis_pixels", "timestamp_source": "server_received"},
+            ]
+            second_quality = run_first_pass(aligned_second, None, [(0, 0, cw, ch)], profile_name=profile_name)
+        else:
+            try:
                 tool_result = _run_tool(tool_call, frame, reference, roi, profile_name=profile_name)
-        except Exception as e:
-            logger.warning(f"[inspect] tool {tool_call.tool} failed: {e}")
-            tool_result = None
+            except Exception as error:
+                logger.warning("inspection tool %s failed: %s", tool_call.tool, error)
+                tool_result = None
         second_pass_ms = (time.perf_counter() - t_sp) * 1000
 
         if tool_result is not None:
@@ -788,18 +766,23 @@ def _execute_inspection_pipeline(
                 sec_entry["pattern_found"] = bool(getattr(reg, "pattern_found", False))
                 sec_entry["glare_ratio"] = float(getattr(reg, "glare_ratio", 0.0))
                 sec_entry["stratification_delta"] = float(getattr(reg, "stratification_delta", 0.0))
-                sec_entry["estimated_ntu"] = float(getattr(reg, "estimated_ntu", 0.0))
-                sec_entry["who_tier"] = str(getattr(reg, "who_tier", "PRISTINE"))
-            if profile_name == "structural_crack_metrology_v1" or getattr(reg, "crack_width_mm", 0.0) > 0:
-                sec_entry["crack_width_mm"] = float(getattr(reg, "crack_width_mm", 0.0))
+            if profile_name == "structural_crack_metrology_v1" or getattr(reg, "crack_width_px", 0.0) > 0:
+                sec_entry["crack_width_px"] = float(getattr(reg, "crack_width_px", 0.0))
                 sec_entry["crack_length_px"] = float(getattr(reg, "crack_length_px", 0.0))
                 sec_entry["crack_severity_score"] = float(getattr(reg, "crack_severity_score", 0.0))
-            second_pass = {"regions": [sec_entry], "notes": tool_result.notes}
+            second_pass = {"regions": [sec_entry], "notes": tool_result.notes,
+                           "evidence_source": "new_capture" if independent_capture_used else "same_image_processing"}
+            if pair_validation:
+                second_pass["crop_in_first_frame"] = pair_validation["crop"]
         else:
             second_pass = None
 
         second_region = tool_result.region if tool_result is not None else None
-        final = decide(first_pass, second_region, profile_name=profile_name)
+        final = decide(first_pass, second_region, profile_name=profile_name,
+                       independent_capture=independent_capture_used)
+        if independent_capture_used and second_quality.status == "UNCERTAIN":
+            final = decide(first_pass, None, profile_name=profile_name)
+            final.reasoning = ["new capture remains ambiguous: " + "; ".join(second_quality.evidence_gap)]
     else:
         agent_ms = None
         second_pass_ms = None
@@ -822,10 +805,8 @@ def _execute_inspection_pipeline(
             ev["pattern_visibility"] = float(pv)
             ev["pattern_sharpness"] = float(getattr(r, "pattern_sharpness", 0.0))
             ev["pattern_found"] = bool(getattr(r, "pattern_found", False))
-            ev["estimated_ntu"] = float(getattr(r, "estimated_ntu", 0.0))
-            ev["who_tier"] = str(getattr(r, "who_tier", "PRISTINE"))
         if profile_name == "structural_crack_metrology_v1" or getattr(r, "crack_severity_score", 0.0) > 0:
-            ev["crack_width_mm"] = float(getattr(r, "crack_width_mm", 0.0))
+            ev["crack_width_px"] = float(getattr(r, "crack_width_px", 0.0))
             ev["crack_length_px"] = float(getattr(r, "crack_length_px", 0.0))
             ev["crack_severity_score"] = float(getattr(r, "crack_severity_score", 0.0))
         regions_json.append({
@@ -845,8 +826,10 @@ def _execute_inspection_pipeline(
     )
 
     result: dict = {
+        "measurement_contract": MEASUREMENT_CONTRACT,
         "provenance": {
             "execution_mode": execution_mode,
+            "runtime_instance_id": RUNTIME_INSTANCE_ID,
             "opencv_version": cv2.__version__,
             "measurement_basis": "uncalibrated_image_heuristics",
         },
@@ -876,7 +859,8 @@ def _execute_inspection_pipeline(
             f"frame #{frame_info_for_result[1]['seq']} ({frame_info_for_result[1]['lighting']})"
         )
     else:
-        result["frames"] = [{"seq": first_seq, "timestamp": first_frame_timestamp, "lighting": first_lighting}]
+        result["frames"] = [{"seq": first_seq, "timestamp": first_frame_timestamp, "lighting": first_lighting,
+                             "sha256": frame_digest(frame), "sha256_basis": "decoded_analysis_pixels", "timestamp_source": "server_received"}]
         result["frame_info"] = f"LOOK 1: {first_frame_timestamp} frame #{first_seq} ({first_lighting})"
 
     total_ms = (time.perf_counter() - t_total_start) * 1000
@@ -905,21 +889,38 @@ def _execute_inspection_pipeline(
     except Exception:
         pass
 
-    job_id = uuid.uuid4().hex[:8]
-    try:
-        FRAME_CACHE[job_id] = {
-            "frame": frame,
-            "timestamp": first_frame_timestamp,
-            "seq": first_seq,
-            "lighting": first_lighting,
-            "profile": profile_name,
-            "roi": roi,
-        }
-        if len(FRAME_CACHE) > 100:
-            oldest = next(iter(FRAME_CACHE))
-            del FRAME_CACHE[oldest]
-    except Exception:
-        pass
+    job_id = uuid.uuid4().hex
+    can_recapture = (execution_mode == "live_opencv" and profile_name == "water_turbidity_v1"
+                     and first_pass.status == "UNCERTAIN" and final.decision == "REVIEW"
+                     and any(r.pattern_found for r in first_pass.regions) and not independent_capture_used)
+    instructions = ["Keep the same sample, checkerboard and camera framing.",
+                    "Change the lighting: add backlight or move the light away from glare.",
+                    "Take a new photo without filtering or reusing the first image."]
+    result["capture_session"] = {
+        "state": "awaiting_capture" if can_recapture else "needs_review" if final.decision == "REVIEW" else "complete",
+        "can_recapture": can_recapture,
+        "instructions": instructions if can_recapture else [],
+        "parent_job_id": original_job_id,
+    }
+    if can_recapture or independent_capture_used:
+        try:
+            expires_at = capture_store.save(job_id, frame, reference, {
+                "profile": profile_name, "timestamp": first_frame_timestamp, "lighting": first_lighting,
+                "execution_mode": execution_mode,
+                "can_recapture": can_recapture,
+            }, second_frame=second_frame if independent_capture_used else None)
+        except (sqlite3.Error, OSError) as error:
+            logger.error("capture persistence failed: %s", type(error).__name__)
+            raise CaptureSessionError("capture storage is unavailable; retry the inspection", 503) from error
+        result["capture_session"]["expires_at"] = datetime.datetime.fromtimestamp(expires_at, datetime.timezone.utc).isoformat()
+        result["capture_session"]["evidence_available"] = True
+    result["acquisition"] = {
+        "observations_received": 2 if second_frame is not None else 1,
+        "observations_used": 2 if independent_capture_used else 1,
+        "new_capture_used": independent_capture_used,
+        "parent_job_id": original_job_id,
+        "pair_validation": pair_validation,
+    }
 
     try:
         store.save(job_id, result)
@@ -932,7 +933,7 @@ def _execute_inspection_pipeline(
 
 @app.post("/inspect/sample/{sample_id}")
 async def inspect_sample(sample_id: str):
-    """Run the real OpenCV 5 + Agent pipeline on one of the physics-calibrated
+    """Run the real OpenCV 5 + Agent pipeline on one of the generated synthetic
     benchmark samples and return {job_id, sample_id, profile}."""
     try:
         frame1, frame2, profile_name = _generate_sample_frames(sample_id)
@@ -958,7 +959,8 @@ async def inspect(request: Request):
 
     golden = demo_golden.resolve_golden_from_request(form)
     if golden is not None:
-        golden = {**golden, "provenance": {"execution_mode": "demo_fixture"}}
+        golden = {**golden, "provenance": {"execution_mode": "demo_fixture"},
+                  "measurement_contract": MEASUREMENT_CONTRACT}
         golden_job_id = uuid.uuid4().hex[:8]
         try:
             store.save(golden_job_id, golden)
@@ -1055,15 +1057,13 @@ async def inspect(request: Request):
         requested_second_lighting = "backlight"
 
     if second_upload is not None and hasattr(second_upload, "read"):
+        sec_data = await second_upload.read()
+        if len(sec_data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="second image exceeds the upload limit")
         try:
-            sec_data = await second_upload.read()  # type: ignore
-            if sec_data and 0 < len(sec_data) <= MAX_UPLOAD_BYTES:
-                try:
-                    second_frame = _decode_image(sec_data)
-                except ValueError:
-                    second_frame = None
-        except Exception:
-            second_frame = None
+            second_frame = _decode_image(sec_data)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=f"invalid second image: {error}") from error
 
     original_job_id = form.get("original_job_id") or form.get("previous_job_id") or form.get("job_id")
     if original_job_id and hasattr(original_job_id, "read"):
@@ -1074,6 +1074,32 @@ async def inspect(request: Request):
     if original_job_id:
         original_job_id = str(original_job_id).strip()
 
+    first_capture_metadata = None
+    if original_job_id:
+        if second_upload is not None:
+            raise HTTPException(status_code=400, detail="follow-up requests accept one new image")
+        try:
+            session = capture_store.load(original_job_id)
+        except (sqlite3.Error, OSError) as error:
+            raise CaptureSessionError("capture storage is unavailable", 503) from error
+        if profile_name != session.metadata["profile"]:
+            raise CaptureSessionError("the inspection profile cannot change during recapture", 409)
+        if not session.metadata.get("can_recapture"):
+            raise CaptureSessionError("this inspection already used its follow-up capture; start a new inspection", 409)
+        if session.metadata["lighting"] == requested_second_lighting:
+            raise CaptureSessionError("use different lighting for the new capture")
+        second_frame = frame
+        frame = session.frame
+        reference = session.reference
+        first_lighting = session.metadata["lighting"]
+        first_capture_metadata = {"timestamp": session.metadata["timestamp"]}
+
+    if second_frame is not None and (first_lighting == requested_second_lighting):
+        raise CaptureSessionError("declare a different lighting condition for the second capture")
+    allowed_lighting = {"ambient", "backlight", "flash", "side_light"}
+    if first_lighting not in allowed_lighting or requested_second_lighting not in allowed_lighting:
+        raise CaptureSessionError("unsupported lighting condition")
+
     job_id, _ = _execute_inspection_pipeline(
         frame=frame,
         profile_name=profile_name,
@@ -1083,6 +1109,7 @@ async def inspect(request: Request):
         second_frame_lighting=requested_second_lighting,
         original_job_id=original_job_id,
         decode_ms=decode_ms,
+        first_capture_metadata=first_capture_metadata,
     )
     return JSONResponse({"job_id": job_id})
 
@@ -1100,3 +1127,21 @@ async def get_job(job_id: str):
     if result is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return JSONResponse(result)
+
+
+@app.get("/jobs/{job_id}/captures/{index}")
+async def get_capture(job_id: str, index: int):
+    """Return a retained analysis-space capture; expired evidence is never substituted."""
+    if index not in (0, 1):
+        raise HTTPException(status_code=404, detail="capture not found")
+    try:
+        session = capture_store.load(job_id)
+    except (sqlite3.Error, OSError) as error:
+        raise CaptureSessionError("capture storage is unavailable", 503) from error
+    frame = session.frame if index == 0 else session.second_frame
+    if frame is None:
+        raise HTTPException(status_code=404, detail="capture not found")
+    ok, encoded = cv2.imencode(".png", frame)
+    if not ok:
+        raise CaptureSessionError("could not render the retained capture", 503)
+    return Response(encoded.tobytes(), media_type="image/png", headers={"Cache-Control": "private, no-store"})
