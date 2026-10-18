@@ -7,6 +7,44 @@ on:
     branches: [main]
 
 jobs:
+  arm64-lambda-runtime:
+    name: Native ARM64 Lambda container
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build actual ARM64 Lambda image
+        run: |
+          if ! docker build --platform linux/arm64 -f services/inference/Dockerfile.lambda -t loopsight-arm64:check . > /tmp/loopsight-arm-build.log 2>&1; then
+            tail -n 40 /tmp/loopsight-arm-build.log
+            python3 - <<'PY'
+          from pathlib import Path
+          message = Path('/tmp/loopsight-arm-build.log').read_text()[-6000:]
+          message = message.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+          print('::error title=ARM64 Lambda build::' + message)
+          PY
+            exit 1
+          fi
+      - name: Start Lambda runtime emulator
+        run: >-
+          docker run -d --name loopsight-arm64 -p 9000:8080
+          -e LOOPSIGHT_BUILD_REVISION=${{ github.sha }}
+          -e GEMINI_API_KEY= -e DYNAMO_TABLE_NAME= -e LOOPSIGHT_EVIDENCE_BUCKET=
+          -e LOOPSIGHT_API_TOKEN= -e DEMO_MODE=
+          -e OPENBLAS_NUM_THREADS=1 -e OMP_NUM_THREADS=1 loopsight-arm64:check
+      - name: Invoke packaged handler on native ARM64
+        run: python3 scripts/smoke_lambda_image.py --revision '${{ github.sha }}' --output /tmp/native-arm64-lambda.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-arm64-lambda-verification
+          path: /tmp/native-arm64-lambda.json
+      - name: Container diagnostics
+        if: failure()
+        run: docker logs loopsight-arm64 || true
+      - name: Stop test container
+        if: always()
+        run: docker rm -f loopsight-arm64 || true
+
   infrastructure-checks:
     name: AWS configuration validation
     runs-on: ubuntu-latest
