@@ -23,7 +23,7 @@
     "scripts/evaluate_captures.py": "a6ffa99d51d1e68de845d0a37961f99d88e3b7e919c48ce03627166f55c9cb6f",
     "cv/first_pass.py": "b2ab19eaba697476ba2f60cdf2684e4300097fd0c1700fa844a8eff6fa7bc2af",
     "cv/policy.py": "499549b6f3464b22d49a118d409f6ff0eec9adbeab5161960e5d156a60d9a4a8",
-    "capture_sessions.py": "38884913ebb8e3d2d8a0527dbe74a20b97a34fdba2d5cf5c06f960b2a0b5137e"
+    "capture_sessions.py": "007484435be882ff7ec98b14b1c37d3af47440dc37bc30efca5e79db51ccf27e"
   },
   "evidence_scope": "synthetic_regression_only",
   "groups": 5,
@@ -37,7 +37,7 @@
     "Missing second images cannot be simulated and are unavailable to every strategy.",
     "All strategies use the same image policy; this tests capture allocation, not LLM superiority."
   ],
-  "evaluation_wall_seconds": 0.258,
+  "evaluation_wall_seconds": 0.437,
   "results": {
     "single": {
       "samples": 34,

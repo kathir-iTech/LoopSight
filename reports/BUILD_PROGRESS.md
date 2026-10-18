@@ -3,6 +3,39 @@
 Updated 18 October 2026. Presentation/video quality is excluded. This is the
 current status record; the earlier strict review remains the baseline audit.
 
+## Website and cloud-storage build — latest batch
+
+- Shared private **S3 job/capture adapters** are implemented with object/pixel
+  hashes, expiry, encryption and no cloud-to-memory fallback. Separate-store
+  contract tests pass; real AWS cross-instance verification is still outstanding.
+- Local SQLite jobs are now authoritative and bounded (100 jobs / 128 MiB),
+  with expiry and no stale RAM cache bypass. Capture bounds remain separate.
+- CloudFormation/deploy script provide scoped storage permissions, generated
+  backend token, ARM64 revision/digest, concurrency, logs and an alarm. The
+  template passes cfn-lint 1.57.2; pinned Python 3.13 dependencies resolve to
+  ARM64 wheels. No real ARM64 container or account deployment is inferred.
+- The website adds `/evaluation`, `/capture-guide`, a printable checkerboard,
+  real backend/storage-read status and an evidence ZIP download. Mobile layout
+  was inspected; a 412px viewport has no document overflow.
+- Evidence archives preserve actual analysis images, policy/source snapshots,
+  result and file manifests. Policy changes reject old recapture continuation.
+  Uploads resize analysis images to at most 1024 pixels per side; overlays to 768.
+- Body budgets apply before multipart parsing, dimensions before OpenCV decode,
+  and inspection work is bounded/offloaded. Busy requests return retryable 429;
+  corrupt references and wrongly typed identity fields are not silently ignored.
+- Current checks: **119 backend passed / one optional live-Gemini skipped;
+  17 web API tests; 8 desktop/mobile browser workflows; production build passed**.
+  Production HTTP smoke verified evidence hashes, actual captures and correct
+  errors. A separate backend-restart smoke verifies differing runtime IDs.
+
+[Current technical report](../services/reports/technical_report.md),
+[deployment instructions](../infra/aws/README.md) and
+[submission checklist](SUBMISSION_CHECKLIST.md) describe the final scope.
+Current S3 tests simulate the service contract; AWS credentials/configuration,
+Vercel project token and independent physical data are still absent. Those
+external prerequisites block live deployment and field validation, not the
+implemented local website flow. Earlier stage counts/status below are historical.
+
 ## Implemented and checked
 
 1. **Trustworthy inference:** unknown jobs return 404; unavailable backends stay
@@ -16,7 +49,7 @@ current status record; the earlier strict review remains the baseline audit.
    original timestamp and profile survive workers sharing a SQLite file. Sessions
    expire after 30 minutes by default, retain at most 100 entries and enforce
    per-entry/total encoded-image limits. Cleanup occurs on access/save; exact-time
-   background deletion and cloud lifecycle policies are not implemented.
+   background deletion is not implemented; the cloud template configures asynchronous S3 lifecycle expiry.
 4. **Pair checks and abstention:** reject duplicate, poorly aligned, unrelated or
    incompatible-aspect captures. Register translations, measure a common crop,
    and retain original first-pass evidence. Same-image water enhancement cannot
@@ -31,8 +64,8 @@ current status record; the earlier strict review remains the baseline audit.
    budgets. Reports separate abstention, coverage, false-clear rate, rejected
    pairs and actual inputs, with source hashes/thresholds/runtime versions.
 
-Verification: **97 backend tests passed, one optional live-Gemini test skipped;
-12 frontend API tests passed; TypeScript and the production build passed.**
+Verification: **119 backend tests passed, one optional live-Gemini test skipped;
+17 frontend API tests and eight desktop/mobile browser workflows passed; TypeScript and the production build passed.**
 Two upstream deprecation warnings remain. A production-server smoke verified a
 new backend runtime instance between first upload and follow-up, unchanged first
 measurements, both capture images pixel-identical after retrieval, duplicate=422,
@@ -93,12 +126,12 @@ still dominate the gap. A 95+ assessment is not supported by current evidence.
    See [the current rules recheck](COMPETITION_RULES_RECHECK.md). Final entry
    requirements and individual eligibility still apply; no private session or
    form submission was performed.
-2. **AWS persistence and deployment:** implement shared session/capture storage
-   (private objects plus metadata), scoped IAM and expiry/deletion. Local SQLite
-   does not share `/tmp` between Lambda instances. Surface DynamoDB failures and
-   remove reliance on in-memory fallback for durable success. Prove uploads and
-   retrieval across separate instances with actual runtime IDs. Verify ARM64
-   image execution; source packaging tests do not establish it.
+2. **AWS deployment verification:** shared S3 adapters, scoped infrastructure,
+   expiry and explicit storage failures are implemented. Execute the reviewed
+   deployment in the intended account, then prove uploads/retrieval across
+   separate instances with actual runtime IDs and verify ARM64 image execution.
+   Local SQLite does not share Lambda `/tmp`; source/adapter tests do not establish
+   deployment. Configure the matching server-only backend token on Vercel.
 3. **Vercel production:** GitHub deployment records show a Vercel integration,
    with previews for this branch. Public production still serves older code:
    an unknown job returned HTTP 200/PASS without provenance during this audit.
@@ -113,10 +146,10 @@ still dominate the gap. A 95+ assessment is not supported by current evidence.
    Gemini controls, a frozen blind set, group-aware uncertainty intervals,
    false-clear analysis and measured observation/latency/cost tradeoffs. Report
    ties, losses, exclusions and failed recaptures. Never tune on the blind test.
-6. **Operational hardening:** bound decode/body/concurrency work, handle storage
-   outages consistently, test load and cloud cold starts, lock Python deployment
-   dependencies, and verify a real supported MCP client/transport. Current MCP
-   endpoint tests do not establish full client interoperability.
+6. **Operational validation:** decode/body/concurrency limits, explicit storage
+   outages and pinned Python dependencies are implemented. Load-test the actual
+   cloud deployment/cold starts and verify a real supported MCP client/transport.
+   Current custom endpoint tests do not establish full client interoperability.
 7. **User/field validation:** mobile camera permissions, interrupted uploads,
    task completion, capture retries and interpretation of REVIEW/scope. Record
    real user observations and outcome evidence rather than assume impact.

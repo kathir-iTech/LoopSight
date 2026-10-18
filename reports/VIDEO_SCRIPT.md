@@ -1,5 +1,7 @@
 # LoopSight — Submission Video Script (≤5 minutes)
 
+> Historical script: reconcile every technical claim with the [current technical report](../services/reports/technical_report.md) before recording. No physical NTU/mm calibration, field accuracy or deployed AWS performance is established. The owner manages video/presentation.
+
 > Timed outline for the required ≤5-minute judge video. Written against what the system **actually does now** (water turbidity screening, not the prior FDM reference). Record with OBS Studio, 1080p, captions. No watermark. Keep total ≤4:45.
 
 > Delivery: one presenter (Kathir), screen share of live `https://<vercel-url>` + `https://<lambda-url>/version`. Rehearse the genuinely ambiguous case (borderline visibility where agent asks for different lighting) at least twice — the wow moment must not depend on a lucky first-pass. Have a printed checkerboard + clear glass on desk as physical prop.

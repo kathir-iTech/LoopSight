@@ -1,0 +1,22 @@
+{
+  "status": "passed",
+  "scope": "local_transport_check",
+  "inputs": "generated synthetic fixtures uploaded through real web proxy",
+  "physical_validation": false,
+  "build_revision": "unversioned-local",
+  "runtime_architecture": "x86_64",
+  "storage": {
+    "jobs": "InMemoryJobStore",
+    "captures": "SqliteCaptureSessionStore",
+    "shared_across_instances": false
+  },
+  "different_runtime_instances_observed": false,
+  "retained_pixels_verified": true,
+  "evidence_file_hashes_verified": true,
+  "first_decision": "REVIEW",
+  "second_decision": "PASS",
+  "observations_used": 2,
+  "unknown_job_status": 404,
+  "corrupt_upload_status": 400,
+  "duplicate_status": 422
+}

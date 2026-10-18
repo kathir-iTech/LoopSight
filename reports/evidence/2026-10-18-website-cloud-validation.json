@@ -1,0 +1,54 @@
+{
+  "checked_at_india": "2026-10-18T15:45:52.961415+05:30",
+  "backend": {
+    "passed": 119,
+    "skipped_optional_live_gemini": 1,
+    "upstream_deprecation_warnings": 2
+  },
+  "web_api": {
+    "passed": 17
+  },
+  "browser": {
+    "passed": 8,
+    "projects": [
+      "desktop Chromium",
+      "mobile Pixel 7 Chromium"
+    ],
+    "backend": "real local OpenCV 5",
+    "frontend": "production Next.js build",
+    "flows": [
+      "upload/recapture/reload/evidence download",
+      "duplicate rejection",
+      "evaluation filtering/report download",
+      "controlled outage with no verdict"
+    ]
+  },
+  "production_build": "passed",
+  "typescript": "passed with production build",
+  "cloudformation_lint": "passed with cfn-lint 1.57.2",
+  "deployment_shell_syntax": "passed",
+  "arm64_binary_wheel_resolution": "passed; no ARM64 code executed",
+  "local_backend_restart_smoke": "passed with different runtime IDs",
+  "mobile_home_layout": {
+    "viewport_width": 412,
+    "document_width": 412,
+    "header_height": 111
+  },
+  "real_aws_deployed": false,
+  "real_arm64_container_executed": false,
+  "vercel_live_backend_verified": false,
+  "physical_accuracy_validated": false,
+  "source_sha256": {
+    "requirements.txt": "f6b46a300de1092bb807140d3e330e7a9cc578bd2f1a742713849d98083aa3f4",
+    "infra/aws/template.yaml": "75747efb2a9c6efd59eb8d395b3451d8a16572faea2021e7b0acdd15a2b88a13",
+    "services/inference/main.py": "c3b1862f37c8df7b8ea5a2fc27b091d39278ffb696d8fd9888c5027730cc8c9c",
+    "services/inference/cloud_storage.py": "c6482edd68bba56a390b63eb776e1b903d54025b40c1fcc535c184ff24628b0f",
+    "services/inference/capture_sessions.py": "007484435be882ff7ec98b14b1c37d3af47440dc37bc30efca5e79db51ccf27e",
+    "services/inference/storage.py": "70613b3dc6a86eb0b4971007a91dc57669819bb4ac91259c7c16819e8199f9d4",
+    "services/inference/evidence_bundle.py": "3ebb276ece0b0387fefac056a94b934eaf06fced3d34ea9e2559a70a5319cd8c",
+    "services/inference/request_limits.py": "e3fef42f0325711442681b12cd545c91775bb7e3d167ef7db64fc31219798dd6",
+    "apps/web/src/app/evaluation/page.tsx": "3356cf72812ff494a061bd207bae8e0e4e064576f40315bcaee8c365f728a683",
+    "apps/web/src/app/job/[id]/page.tsx": "c2280782dd2af1df842dc2b41f4be5a256e6c96cb0544122e3394d92cf3dfa00",
+    "apps/web/playwright.config.ts": "40984ae2c2633e8a63a3fbd5b7488817dec9e722bd179e096c54e95d5c05e2ae"
+  }
+}

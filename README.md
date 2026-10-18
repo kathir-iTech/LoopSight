@@ -21,18 +21,21 @@ records why historical claims were withdrawn.
 
 - Real uploaded-image OpenCV execution, eight bounded diagnostic tools and
   optional Gemini tool selection. Final verdicts come from explicit policy.
-- First-pass evidence retained across local backend restarts, with expiring
-  SQLite capture sessions and exact image hashes. Follow-ups reject duplicates,
+- First-pass evidence retained across workers, using bounded SQLite locally
+  or shared private S3 objects in cloud mode, with expiry and exact image hashes. Follow-ups reject duplicates,
   incompatible framing and inconsistent appearance. Visual checks do not prove
   physical sample identity or acquisition authenticity.
 - Actual first/second images accessible during evidence retention, with private
   no-store responses. Expiry, missing evidence and backend failures remain errors.
 - Separate provenance for uploaded-image computation, synthetic benchmarks and
   explicitly enabled demo fixtures. Unknown job IDs return 404.
-- JSON/PDF results with image-unit scope and observation counts. Same-image
+- JSON/PDF results and downloadable evidence ZIPs with image-unit scope, policy
+  snapshots, file manifests and observation counts. Same-image
   enhancement is not counted as a new capture or used to clear uncertain water.
 - Manifest-based paired evaluation with exact requested-input budgets,
   preparation-group/image split leakage checks, coverage and false-clear metrics.
+- A measured-results explorer at `/evaluation`, live backend/storage-read
+  status, and `/capture-guide` with a printable checkerboard.
 
 ## Run locally
 
@@ -52,16 +55,19 @@ npm ci
 INFERENCE_API_URL=http://127.0.0.1:8000 npm run dev
 ```
 
-Open http://localhost:3000. Backend `/health`, `/version`, `/samples` and
+Open http://localhost:3000. Backend `/health`, `/ready`, `/version`, `/samples` and
 `/mcp/tools` expose readiness, runtime metadata, synthetic scenarios and tool
 schemas. Fonts are bundled locally. `.env.example` documents optional settings.
 Do not build and run a frontend server concurrently against the same `.next`.
 
 On Vercel, real inference requires `INFERENCE_API_URL`. Missing configuration
 returns 503. Only server-side `DEMO_MODE=golden` enables explicitly labeled
-fixtures; a request cannot enable demo mode. Lambda `/tmp` does not share
-SQLite between instances: cloud capture persistence still needs implementation.
-No AWS deployment or physical field performance is claimed by this checkout.
+fixtures; a request cannot enable demo mode. For AWS operation, use the
+[deployment guide](infra/aws/README.md) and set `LOOPSIGHT_EVIDENCE_BUCKET`.
+This selects shared S3 for jobs/captures; Lambda `/tmp` does not share SQLite.
+When backend token protection is enabled, set the matching server-only
+`INFERENCE_API_TOKEN` on Vercel. Prepared infrastructure is not a verified AWS
+deployment. No physical field performance is claimed by this checkout.
 
 ## Verify and evaluate
 
@@ -71,6 +77,9 @@ GEMINI_API_KEY=disabled .venv/bin/python -m pytest services/inference/tests -q
 cd apps/web
 npm test
 npm run build
+# Real desktop/mobile workflows; installs Chromium once if needed:
+npx playwright install chromium
+npm run test:e2e
 ```
 
 The committed dataset is entirely synthetic despite its historical
@@ -100,3 +109,9 @@ Collect genuine independent data using the
 [capture protocol](data/captures/README.md). The [current rules recheck](reports/COMPETITION_RULES_RECHECK.md) confirms that
 teams without a grant proposal remain eligible for all prizes, and lists final
 submission requirements. No proposal or final entry was submitted by this agent.
+
+Cloud configuration is in `infra/aws/template.yaml`; it passes cfn-lint and the
+pinned runtime resolves to ARM64 wheels. These checks do not establish actual
+AWS execution. Upload requests are capped at 4 MB, photos at 3.5 MB in the UI,
+and analysis images are resized to at most 1024 pixels per side. See the current
+technical report for retention, bearer-link access and download-size limits.
