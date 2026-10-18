@@ -28,6 +28,7 @@ import {
   Sliders,
   Crosshair,
   Maximize2,
+  RefreshCw,
 } from "lucide-react";
 import { loadHistory, clearHistory, type HistoryEntry } from "@/lib/history";
 import toast from "react-hot-toast";
@@ -187,10 +188,20 @@ export default function HomePage() {
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
   const [benchmarkFilter, setBenchmarkFilter] = useState<"all" | "water" | "crack">("all");
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [cameraLoading, setCameraLoading] = useState(false);
 
   useEffect(() => {
     setHistory(loadHistory().slice(0, 4));
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach((t) => t.stop());
+      }
+    };
+  }, [cameraStream]);
 
   const computeClientPreflight = useCallback((url: string) => {
     const img = new window.Image();
@@ -240,6 +251,10 @@ export default function HomePage() {
         setError("Image file exceeds 10 MB limit. Please select a smaller photo.");
         return;
       }
+      if (cameraStream) {
+        cameraStream.getTracks().forEach((t) => t.stop());
+        setCameraStream(null);
+      }
       setSelectedFile(file);
       const url = URL.createObjectURL(file);
       setPreview((prev) => {
@@ -250,7 +265,7 @@ export default function HomePage() {
       setMode("idle");
       setError(null);
     },
-    [computeClientPreflight]
+    [computeClientPreflight, cameraStream]
   );
 
   const handleReferenceSelect = useCallback((file: File) => {
@@ -301,26 +316,49 @@ export default function HomePage() {
   );
 
   const startCamera = useCallback(async () => {
+    setCameraLoading(true);
+    setError(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        });
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true });
       }
+      setCameraStream(stream);
       setMode("camera");
-      setError(null);
-    } catch {
-      setError("Camera access denied or unavailable.");
+      setCameraLoading(false);
+    } catch (err) {
+      console.error("Camera access failed:", err);
+      setCameraLoading(false);
+      setError("Camera could not be accessed. Please allow permissions or select a benchmark preset below.");
+      toast.error("Camera access denied or unavailable");
     }
   }, []);
+
+  const stopCamera = useCallback(() => {
+    if (cameraStream) {
+      cameraStream.getTracks().forEach((t) => t.stop());
+    }
+    setCameraStream(null);
+    setMode("idle");
+    setCameraLoading(false);
+  }, [cameraStream]);
 
   const capturePhoto = useCallback(() => {
     if (!videoRef.current || !canvasRef.current) return;
     const video = videoRef.current;
     const canvas = canvasRef.current;
+    if (!video.videoWidth || !video.videoHeight) {
+      toast.error("Camera feed not ready yet, please wait a moment.");
+      return;
+    }
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    const ctx = canvas.getContext("2d")!;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
     ctx.drawImage(video, 0, 0);
     canvas.toBlob(
       (blob) => {
@@ -330,17 +368,10 @@ export default function HomePage() {
         }
       },
       "image/jpeg",
-      0.9
+      0.92
     );
-    const stream = video.srcObject as MediaStream;
-    stream?.getTracks().forEach((t) => t.stop());
-  }, [handleFileSelect]);
-
-  const stopCamera = useCallback(() => {
-    const stream = videoRef.current?.srcObject as MediaStream;
-    stream?.getTracks().forEach((t) => t.stop());
-    setMode("idle");
-  }, []);
+    stopCamera();
+  }, [handleFileSelect, stopCamera]);
 
   const handleSubmit = useCallback(async () => {
     if (!selectedFile && !preview) return;
@@ -372,6 +403,11 @@ export default function HomePage() {
 
   const runBenchmarkSample = useCallback(
     async (bench: BenchmarkCase) => {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach((t) => t.stop());
+        setCameraStream(null);
+      }
+      setMode("idle");
       setSelectedProfile(bench.profile);
       setPreview(bench.preview);
       setSelectedFile(null);
@@ -392,7 +428,7 @@ export default function HomePage() {
         setUploading(false);
       }
     },
-    [computeClientPreflight, router]
+    [computeClientPreflight, router, cameraStream]
   );
 
   const reset = useCallback(() => {
@@ -400,9 +436,9 @@ export default function HomePage() {
     setPreview(null);
     setSelectedFile(null);
     setPreflight(null);
-    setMode("idle");
+    stopCamera();
     setError(null);
-  }, [preview]);
+  }, [preview, stopCamera]);
 
   const resetReference = useCallback(() => {
     if (referencePreview && referencePreview.startsWith("blob:")) URL.revokeObjectURL(referencePreview);
@@ -498,7 +534,7 @@ export default function HomePage() {
 
             {/* Viewport Box */}
             <div
-              className={`hud-bracket relative w-full h-[460px] md:h-[500px] rounded-2xl border-2 transition-all overflow-hidden flex flex-col justify-between ${
+              className={`hud-bracket relative w-full h-[380px] md:h-[430px] rounded-2xl border-2 transition-all overflow-hidden flex flex-col justify-between ${
                 dragOver
                   ? "border-[#38bdf8] bg-[#38bdf8]/10 shadow-2xl shadow-[#38bdf8]/20"
                   : "border-[#163256] bg-[#081528] shadow-2xl"
@@ -560,13 +596,35 @@ export default function HomePage() {
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
-                      className="w-full h-full flex flex-col items-center justify-center gap-4"
+                      className="relative w-full h-full flex flex-col items-center justify-center bg-black rounded-xl overflow-hidden"
                     >
-                      <video ref={videoRef} className="w-full h-full object-contain rounded-xl" autoPlay playsInline muted />
-                      <div className="absolute bottom-6 flex gap-3 z-30">
+                      {cameraLoading && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#070d18]/90 gap-2 z-20">
+                          <RefreshCw className="h-6 w-6 text-[#38bdf8] animate-spin" />
+                          <span className="text-xs text-[#8aa0c0] font-mono">Connecting to optical sensor...</span>
+                        </div>
+                      )}
+                      <video
+                        ref={(el) => {
+                          videoRef.current = el;
+                          if (el && cameraStream && el.srcObject !== cameraStream) {
+                            el.srcObject = cameraStream;
+                            el.play().catch(() => {});
+                          }
+                        }}
+                        autoPlay
+                        playsInline
+                        muted
+                        className="w-full h-full object-contain rounded-xl bg-black"
+                      />
+                      <div className="absolute top-3 left-3 z-30 flex items-center gap-2 bg-[#070d18]/85 backdrop-blur px-2.5 py-1 rounded-full border border-white/10 text-[11px] font-mono">
+                        <span className="w-2 h-2 rounded-full bg-[#ef4444] animate-pulse" />
+                        LIVE OPTICAL FEED
+                      </div>
+                      <div className="absolute bottom-4 flex gap-3 z-30">
                         <Button
                           onClick={capturePhoto}
-                          className="bg-[#38bdf8] hover:bg-[#0ea5e9] text-[#070d18] font-bold shadow-lg shadow-[#38bdf8]/30 px-6"
+                          className="bg-[#38bdf8] hover:bg-[#0ea5e9] text-[#070d18] font-bold shadow-lg shadow-[#38bdf8]/30 px-6 h-10 text-xs"
                         >
                           <Camera className="mr-2 h-4 w-4" />
                           Capture Frame
@@ -574,7 +632,7 @@ export default function HomePage() {
                         <Button
                           onClick={stopCamera}
                           variant="outline"
-                          className="border-[#163256] bg-[#070d18]/90 text-white hover:bg-[#0b192e]"
+                          className="border-[#163256] bg-[#070d18]/90 text-white hover:bg-[#0b192e] h-10 text-xs"
                         >
                           Cancel
                         </Button>
@@ -666,6 +724,44 @@ export default function HomePage() {
                     Change photo <ArrowRight className="h-3 w-3" />
                   </button>
                 )}
+              </div>
+            </div>
+
+            {/* Quick 1-Click Benchmark Strip — Instant Judge Access Without Scrolling */}
+            <div className="rounded-2xl bg-[#0b192e] border border-[#163256] p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-[#38bdf8] flex items-center gap-1.5 uppercase tracking-wide">
+                  <Sparkles className="h-3.5 w-3.5" />
+                  1-Click Test Presets (Instant Pipeline Evaluation)
+                </span>
+                <span className="text-[10px] text-[#8aa0c0] font-mono">No printer / camera needed</span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {BENCHMARK_CASES.map((b) => (
+                  <button
+                    key={b.id}
+                    type="button"
+                    disabled={uploading}
+                    onClick={() => runBenchmarkSample(b)}
+                    className="p-2 rounded-xl bg-[#070d18] hover:bg-[#163256] border border-[#163256] hover:border-[#38bdf8]/50 text-left transition-all group disabled:opacity-50"
+                  >
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="text-[11px] font-bold text-white group-hover:text-[#38bdf8] truncate">
+                        {b.title}
+                      </span>
+                      <span
+                        className={`text-[9px] font-mono px-1 rounded flex-shrink-0 font-bold ${
+                          b.expectedVerdict === "PASS"
+                            ? "bg-[#22c55e]/20 text-[#22c55e]"
+                            : "bg-[#ef4444]/20 text-[#ef4444]"
+                        }`}
+                      >
+                        {b.expectedVerdict}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-[#8aa0c0] truncate mt-0.5 font-mono">{b.badge}</p>
+                  </button>
+                ))}
               </div>
             </div>
 
