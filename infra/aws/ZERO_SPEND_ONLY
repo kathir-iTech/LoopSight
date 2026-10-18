@@ -14,6 +14,9 @@ verification terms before recommending payment entry. Do not remove the gate,
 upgrade an AWS plan or provision resources based on earlier broad authorization.
 First establish a verified no-charge access arrangement consistent with the
 owner's constraint and review the deployment architecture for that arrangement.
+AWS documentation now confirms no charges during Free Plan usage. The owner's
+actual Free Plan status, available services and deployment authentication still
+need verification; this statement does not by itself unblock the template.
 
 No AWS account deployment has been performed by this project session.
 See reports/ZERO_SPEND_PLAN.md for the evidence and remaining dependency.

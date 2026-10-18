@@ -63,13 +63,47 @@ Do not send this message without an explicit instruction to contact organizers.
 
 ## Owner-assisted signup next step
 
-The owner can inspect the official [AWS Free Tier page](https://aws.amazon.com/free/)
-and its account-plan selection privately. Before payment entry, collect the
-non-sensitive plan/billing text for review. Do not choose a Paid Plan, a paid
-support subscription, or accept a verification charge under the zero-spend
-constraint. Check any bank authorization/foreign-exchange terms as well.
+The owner has now signed in with GitHub and supplied an AWS Settings profile
+screenshot (`settings.aws.com/profile`). No card has been added, owner-confirmed.
+The screenshot establishes browser sign-in, not this workspace's deployment
+permissions or the account's actual plan. Inspect **Billing** in that sidebar
+and share only non-sensitive plan/credit information. Do not upgrade, activate
+advanced features, add paid support or enter payment details for this check.
 
-The latest retry of the Free Tier, FAQ, account-plan and account-management
-documentation still returned proxy CONNECT 403. A saved allowlist is not proof
-that runtime access is active. No current Free Plan billing protection or
-service compatibility has been verified and the deployment gate remains closed.
+## Successful official-terms recheck after signup
+
+The following official pages subsequently became accessible (HTTP 200). This
+supersedes the earlier documentation access failures; it does not authenticate
+the owner's account:
+
+- [AWS Free Tier FAQ](https://aws.amazon.com/free/free-tier-faqs/), General Q4:
+  "A payment method isn't required to sign up for most new customers." Some
+  customers may be asked for one for identity verification. The FAQ describes
+  a new signup experience launched in October 2026, automatic Free Plan enrollment
+  for eligible new accounts, and Billing in the Settings Portal.
+- [Choosing a plan](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/free-tier-plans.html):
+  "The Free account plan ensures you won't incur any charges while you explore
+  AWS services and build your applications." The comparison table states
+  "No charges incur during usage." A Free Plan ends after six months or credit
+  exhaustion, whichever is first; access closes rather than automatically
+  becoming a Paid Plan. AWS retains content for 90 days before deletion.
+- The FAQ likewise states the Free Plan account and projects are suspended at
+  expiry and describes upgrading as optional. Its Paid Plan can bill beyond
+  credits; paid project spend limits start at $20 and do not meet a ₹0 policy.
+- [AWS Builder ID sign-in](https://docs.aws.amazon.com/signin/latest/userguide/sign-in-builder-id.html)
+  supports GitHub login and distinguishes Builder ID from AWS resource-account
+  credentials. GitHub login alone does not establish deployment access. Do not
+  assume which identity/account type the profile represents from the screenshot.
+
+A confirmed Free Plan may therefore provide the required no-charge AWS route;
+an organizer sandbox is an alternative, not the only possible route. Exact
+service availability and the owner's plan still need verification. Do not
+upgrade or activate advanced features to make the prepared template work.
+Keep an offline export before expiry; no perpetual free cloud hosting is promised.
+
+Read-only connection discovery found no AWS access keys, web-identity/container
+credentials or populated shared credential/config profiles. The project Python
+SDK's session lookup returned `ProfileNotFound`; no authenticated API request
+was possible. No profile values, credentials or payment details were printed.
+No resources were created. The deployment gate remains closed pending actual
+plan, service compatibility and secure authentication verification.
