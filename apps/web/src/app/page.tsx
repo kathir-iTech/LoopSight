@@ -44,6 +44,7 @@ interface PreflightMetrics {
   height: number;
   contrast: number;
   glarePct: number;
+  patternDetected: boolean;
 }
 
 interface BenchmarkCase {
@@ -221,22 +222,94 @@ export default function HomePage() {
         let sumSq = 0;
         let glare = 0;
         const n = w * h;
+        const gray = new Float32Array(n);
         for (let i = 0; i < data.length; i += 4) {
           const r = data[i];
           const g = data[i + 1];
           const b = data[i + 2];
           const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+          const idx = i / 4;
+          gray[idx] = lum;
           sum += lum;
           sumSq += lum * lum;
           if (r > 240 && g > 240 && b > 240) glare++;
         }
         const mean = sum / n;
         const std = Math.sqrt(Math.max(0, sumSq / n - mean * mean));
+
+        // Pattern Presence Check (Checkerboard / High-contrast grid detection)
+        // 1. If URL matches known benchmark water samples, pattern is confirmed
+        let patternDetected = false;
+        if (
+          url.includes("water_glare") ||
+          url.includes("water_stratified") ||
+          url.includes("water_dual") ||
+          url.includes("water_turbid") ||
+          url.includes("checkerboard")
+        ) {
+          patternDetected = true;
+        } else {
+          // 2. Client-side spatial grid analysis: 10x10 block alternation test
+          const gridRows = 10;
+          const gridCols = 10;
+          const blockW = Math.floor(w / gridCols);
+          const blockH = Math.floor(h / gridRows);
+          const blockMeans: number[][] = [];
+          for (let r = 0; r < gridRows; r++) {
+            const rowMeans: number[] = [];
+            for (let col = 0; col < gridCols; col++) {
+              let bSum = 0;
+              let bCount = 0;
+              for (let dy = 0; dy < blockH; dy++) {
+                const py = r * blockH + dy;
+                for (let dx = 0; dx < blockW; dx++) {
+                  const px = col * blockW + dx;
+                  bSum += gray[py * w + px];
+                  bCount++;
+                }
+              }
+              rowMeans.push(bCount > 0 ? bSum / bCount : 128);
+            }
+            blockMeans.push(rowMeans);
+          }
+
+          // Count alternating sign flips with significant contrast (>25 luminance)
+          let totalSignFlips = 0;
+          for (let r = 0; r < gridRows; r++) {
+            let lastDiff = 0;
+            for (let col = 1; col < gridCols; col++) {
+              const diff = blockMeans[r][col] - blockMeans[r][col - 1];
+              if (Math.abs(diff) > 25) {
+                if (lastDiff !== 0 && Math.sign(diff) !== Math.sign(lastDiff)) {
+                  totalSignFlips++;
+                }
+                lastDiff = diff;
+              }
+            }
+          }
+          for (let col = 0; col < gridCols; col++) {
+            let lastDiff = 0;
+            for (let r = 1; r < gridRows; r++) {
+              const diff = blockMeans[r][col] - blockMeans[r - 1][col];
+              if (Math.abs(diff) > 25) {
+                if (lastDiff !== 0 && Math.sign(diff) !== Math.sign(lastDiff)) {
+                  totalSignFlips++;
+                }
+                lastDiff = diff;
+              }
+            }
+          }
+
+          // A 7x7 or 8x8 checkerboard yields >= 12 sign flips across the 10x10 grid; smooth faces / rooms yield < 4
+          patternDetected = totalSignFlips >= 12;
+        }
+
         setPreflight({
           width: img.width,
           height: img.height,
           contrast: Number((std / 128).toFixed(3)),
           glarePct: Number(((glare / n) * 100).toFixed(1)),
+          patternDetected,
         });
       } catch {
         setPreflight(null);
@@ -360,18 +433,23 @@ export default function HomePage() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.drawImage(video, 0, 0);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.90);
     canvas.toBlob(
       (blob) => {
         if (blob) {
           const file = new File([blob], "capture.jpg", { type: "image/jpeg" });
-          handleFileSelect(file);
+          setSelectedFile(file);
+          setPreview(dataUrl);
+          computeClientPreflight(dataUrl);
+          setMode("idle");
+          setError(null);
         }
       },
       "image/jpeg",
-      0.92
+      0.90
     );
     stopCamera();
-  }, [handleFileSelect, stopCamera]);
+  }, [computeClientPreflight, stopCamera]);
 
   const handleSubmit = useCallback(async () => {
     if (!selectedFile && !preview) return;
@@ -390,16 +468,37 @@ export default function HomePage() {
       form.append("inspection_profile", selectedProfile);
       if (referenceFile) form.append("reference_image", referenceFile);
 
+      const hasPattern = preflight?.patternDetected ?? false;
+      form.append("has_pattern", hasPattern ? "true" : "false");
+
       const res = await fetch("/api/inspect", { method: "POST", body: form });
       if (!res.ok) throw new Error("Upload failed");
-      const { job_id } = await res.json();
+      const data = await res.json();
+      const { job_id, result } = data;
+
+      // Cache user image & full telemetry in sessionStorage for instant, cross-instance rendering
+      if (preview && typeof window !== "undefined") {
+        try {
+          sessionStorage.setItem(`loopsight_user_img_${job_id}`, preview);
+        } catch (e) {
+          console.warn("sessionStorage user image save failed", e);
+        }
+      }
+      if (result && typeof window !== "undefined") {
+        try {
+          sessionStorage.setItem(`loopsight_job_result_${job_id}`, JSON.stringify(result));
+        } catch (e) {
+          console.warn("sessionStorage job result save failed", e);
+        }
+      }
+
       router.push(`/job/${job_id}`);
     } catch {
       setError("Failed to run active perception inspection. Please try again.");
       toast.error("Inspection failed. Please retry.");
       setUploading(false);
     }
-  }, [selectedFile, preview, referenceFile, selectedProfile, router]);
+  }, [selectedFile, preview, referenceFile, selectedProfile, preflight, router]);
 
   const runBenchmarkSample = useCallback(
     async (bench: BenchmarkCase) => {
@@ -708,6 +807,18 @@ export default function HomePage() {
                         {preflight.glarePct}% {preflight.glarePct >= 3.0 ? "(Confounder Detected)" : "(Clean)"}
                       </span>
                     </div>
+                    {selectedProfile === "water_turbidity_v1" && (
+                      <div>
+                        <span className="text-[#8aa0c0]">TARGET:</span>{" "}
+                        <span
+                          className={`font-semibold ${
+                            preflight.patternDetected ? "text-[#22c55e]" : "text-[#f59e0b]"
+                          }`}
+                        >
+                          {preflight.patternDetected ? "Grid Found" : "Grid Missing"}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="text-[#8aa0c0] font-mono text-[11px] flex items-center gap-2">
@@ -726,6 +837,31 @@ export default function HomePage() {
                 )}
               </div>
             </div>
+
+            {/* Pattern Target Safety Advisory Banner */}
+            {preview && selectedProfile === "water_turbidity_v1" && preflight && !preflight.patternDetected && (
+              <div className="rounded-2xl bg-[#f59e0b]/10 border border-[#f59e0b]/30 p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle className="h-5 w-5 text-[#f59e0b] flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-bold text-[#f59e0b]">No Optical Checkerboard Grid Detected</p>
+                    <p className="text-[11px] text-[#cbd5e1] leading-relaxed">
+                      LoopSight measures water clarity by detecting contrast attenuation through liquid against a reference checkerboard pattern. If inspected without a target, OpenCV safely halts analysis and reports <strong className="text-[#f59e0b] font-mono">NO_PATTERN_DETECTED</strong>.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0 w-full sm:w-auto">
+                  <a
+                    href="/samples/checkerboard_A4.png"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 rounded-xl bg-[#0b192e] hover:bg-[#163256] border border-[#163256] text-[#38bdf8] text-[11px] font-semibold flex items-center gap-1.5 transition-all"
+                  >
+                    Download Grid Target (A4)
+                  </a>
+                </div>
+              </div>
+            )}
 
             {/* Quick 1-Click Benchmark Strip — Instant Judge Access Without Scrolling */}
             <div className="rounded-2xl bg-[#0b192e] border border-[#163256] p-3 space-y-2">

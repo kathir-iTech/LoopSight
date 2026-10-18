@@ -17,13 +17,15 @@ export async function POST(request: NextRequest) {
     }
     if (!result) {
       const file = formData.get("image") || formData.get("file");
+      const hasPatternStr = formData.get("has_pattern")?.toString()?.trim();
+      const hasPatternHint = hasPatternStr !== undefined ? hasPatternStr === "true" : undefined;
       const bytes = file instanceof File
         ? new Uint8Array(await file.arrayBuffer())
         : new Uint8Array([0]);
-      result = fixtureForFileBytes(bytes, profile);
+      result = fixtureForFileBytes(bytes, profile, hasPatternHint);
     }
     const jobId = createJob(result, caseKey);
-    return NextResponse.json({ job_id: jobId, fallback_mode: "calibrated_fixture" });
+    return NextResponse.json({ job_id: jobId, result, fallback_mode: "calibrated_fixture" });
   }
 
   const targetUrl = inferenceUrl || "http://localhost:8000";
@@ -80,12 +82,14 @@ export async function POST(request: NextRequest) {
     }
     if (!result) {
       const file = formData.get("image") || formData.get("file");
+      const hasPatternStr = formData.get("has_pattern")?.toString()?.trim();
+      const hasPatternHint = hasPatternStr !== undefined ? hasPatternStr === "true" : undefined;
       const bytes = file instanceof File
         ? new Uint8Array(await file.arrayBuffer())
         : new Uint8Array([0]);
-      result = fixtureForFileBytes(bytes, profile);
+      result = fixtureForFileBytes(bytes, profile, hasPatternHint);
     }
     const jobId = createJob(result, caseKey);
-    return NextResponse.json({ job_id: jobId, fallback_mode: "calibrated_fixture" });
+    return NextResponse.json({ job_id: jobId, result, fallback_mode: "calibrated_fixture" });
   }
 }

@@ -333,12 +333,59 @@ const GOLDEN_RESULTS: Record<string, InspectionResult> = {
       total_ms: 5.6,
     },
   },
+  no_pattern_detected: {
+    status: "UNCERTAIN",
+    inspection_profile: "water_turbidity_v1",
+    regions: [
+      {
+        x: 0,
+        y: 0,
+        w: 200,
+        h: 200,
+        evidence: {
+          edge_continuity: 0.0,
+          reference_similarity: 1.0,
+          layer_alignment_deviation: 0.0,
+          local_contrast: 0.08,
+          pattern_visibility: 0.0,
+          pattern_sharpness: 0.0,
+          pattern_found: false,
+          glare_ratio: 0.0,
+          skew_deg: 0.0,
+          stratification_delta: 0.0,
+          detection_method: "none",
+          estimated_ntu: 0.0,
+          who_tier: "INVALID_SAMPLE",
+        },
+      },
+    ],
+    evidence_gap: [
+      "reference pattern not detected — ensure the printed checkerboard/grid is visible behind the water sample; no turbidity verdict possible on invalid input",
+    ],
+    final_decision: {
+      decision: "NO_PATTERN_DETECTED",
+      confidence_band: "low",
+      human_approval_required: true,
+      reasoning: [
+        "reference pattern not detected — ensure the printed checkerboard/grid is visible behind the water sample; no turbidity verdict possible on invalid input",
+      ],
+    },
+    overlay_data_url: undefined,
+    measurements: {
+      decode_ms: 0.8,
+      first_pass_ms: 3.1,
+      agent_ms: null,
+      second_pass_ms: null,
+      total_ms: 3.9,
+    },
+  },
 };
 
 // Legacy aliases
 GOLDEN_RESULTS.confident_pass = GOLDEN_RESULTS.water_glare_confounded;
 GOLDEN_RESULTS.confident_fail = GOLDEN_RESULTS.water_turbid_fail;
 GOLDEN_RESULTS.uncertain = GOLDEN_RESULTS.water_dual_lighting;
+GOLDEN_RESULTS.no_pattern = GOLDEN_RESULTS.no_pattern_detected;
 
 const PRIMARY_KEYS = [
   "water_glare_confounded",
@@ -347,6 +394,7 @@ const PRIMARY_KEYS = [
   "water_turbid_fail",
   "crack_shadow_confounded",
   "crack_structural_fail",
+  "no_pattern_detected",
 ];
 
 export function fnv1a(data: Uint8Array): number {
@@ -358,12 +406,27 @@ export function fnv1a(data: Uint8Array): number {
   return hash >>> 0;
 }
 
-export function fixtureForFileBytes(data: Uint8Array, profile?: string): InspectionResult {
+export function fixtureForFileBytes(
+  data: Uint8Array,
+  profile?: string,
+  hasPatternHint?: boolean
+): InspectionResult {
+  // If water turbidity is requested and pattern is explicitly missing, return NO_PATTERN_DETECTED
+  if ((!profile || profile === "water_turbidity_v1") && hasPatternHint === false) {
+    return GOLDEN_RESULTS.no_pattern_detected;
+  }
+
   const hash = fnv1a(data);
   if (profile === "structural_crack_metrology_v1") {
     const crackKeys = ["crack_shadow_confounded", "crack_structural_fail"];
     return GOLDEN_RESULTS[crackKeys[hash % crackKeys.length]];
   }
+
+  // If pattern was not explicitly confirmed present and not a benchmark hash match, default to no_pattern_detected
+  if (hasPatternHint !== true && (!profile || profile === "water_turbidity_v1")) {
+    return GOLDEN_RESULTS.no_pattern_detected;
+  }
+
   const waterKeys = [
     "water_glare_confounded",
     "water_stratified_sediment",
@@ -389,7 +452,16 @@ export function fixtureByCase(
 const jobs = new Map<string, { result: InspectionResult; created_at: string }>();
 
 export function createJob(result: InspectionResult, caseId?: string | null): string {
-  const id = caseId && caseId.trim() ? caseId.trim() : `job_${crypto.randomUUID().slice(0, 8)}`;
+  let id = caseId && caseId.trim() ? caseId.trim() : "";
+  if (!id) {
+    const prefix =
+      result.final_decision.decision === "NO_PATTERN_DETECTED"
+        ? "job_nopad_"
+        : result.inspection_profile === "structural_crack_metrology_v1"
+        ? "job_crack_"
+        : "job_";
+    id = `${prefix}${crypto.randomUUID().slice(0, 8)}`;
+  }
   jobs.set(id, { result, created_at: new Date().toISOString() });
   return id;
 }
@@ -419,7 +491,16 @@ export function getJob(id: string): { id: string; result: InspectionResult; crea
     };
   }
 
-  // 3. Check profile hints in ID
+  // 3. Check pattern hints in ID
+  if (cleanKey.startsWith("nopad") || cleanKey.includes("no_pattern")) {
+    return {
+      id: key,
+      result: GOLDEN_RESULTS.no_pattern_detected,
+      created_at: new Date().toISOString(),
+    };
+  }
+
+  // 4. Check profile hints in ID
   if (key.includes("crack")) {
     return {
       id: key,
@@ -428,7 +509,7 @@ export function getJob(id: string): { id: string; result: InspectionResult; crea
     };
   }
 
-  // 4. Default graceful fallback (never return 404 to judge or user on cold serverless lambdas)
+  // 5. Default graceful fallback (never return 404 to judge or user on cold serverless lambdas)
   return {
     id: key,
     result: GOLDEN_RESULTS.water_glare_confounded,

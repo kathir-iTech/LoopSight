@@ -78,7 +78,7 @@ export interface InspectionResult {
   second_pass?: SecondPass;
   final_decision: FinalDecision;
   measurements?: Measurements;
-  overlay_data_url?: string;
+  overlay_data_url?: string | null;
   frames?: Array<{ seq: number | string; timestamp: string; lighting: string }>;
   frame_info?: string;
 }

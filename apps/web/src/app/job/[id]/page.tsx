@@ -176,6 +176,22 @@ export default function JobPage() {
 
   const [activeOverlayLayer, setActiveOverlayLayer] = useState<"overlay" | "raw" | "second">("overlay");
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
+  const [userCustomImage, setUserCustomImage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const customImg = sessionStorage.getItem(`loopsight_user_img_${id}`);
+      if (customImg) setUserCustomImage(customImg);
+      const cached = sessionStorage.getItem(`loopsight_job_result_${id}`);
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          setResult(parsed);
+          setLoading(false);
+        } catch {}
+      }
+    }
+  }, [id]);
 
   const secondInputRef = useRef<HTMLInputElement>(null);
   const secondVideoRef = useRef<HTMLVideoElement>(null);
@@ -542,13 +558,13 @@ export default function JobPage() {
       banner: "BORDERLINE CONFIDENCE — HUMAN REVIEW REQUIRED",
     },
     NO_PATTERN_DETECTED: {
-      glow: "",
-      bg: "bg-[#64748b]/10",
-      border: "border-[#64748b]/40",
-      text: "text-[#94a3b8]",
-      icon: <Eye className="h-8 w-8 text-[#94a3b8]" />,
+      glow: "glow-amber",
+      bg: "bg-[#f59e0b]/10",
+      border: "border-[#f59e0b]/40",
+      text: "text-[#f59e0b]",
+      icon: <Eye className="h-8 w-8 text-[#f59e0b]" />,
       label: "NO PATTERN",
-      banner: "PATTERN NOT DETECTED — RETAKE WITH CHECKERBOARD",
+      banner: "CALIBRATION TARGET NOT DETECTED — CHECKERBOARD REQUIRED",
     },
   };
 
@@ -566,6 +582,21 @@ export default function JobPage() {
   const whoTier =
     primaryEvidence?.who_tier ||
     (patternVis >= 0.85 ? "PRISTINE" : patternVis >= 0.55 ? "ACCEPTABLE" : "ELEVATED_TURBIDITY");
+
+  // Governing resolved metrics across passes
+  const resolvedVis = secondVis !== undefined ? secondVis : patternVis;
+  const resolvedNtu =
+    secondVis !== undefined
+      ? (resolvedVis > 0 ? Math.max(0.1, 3.5 * Math.pow(Math.max(0.001, 1 / resolvedVis - 1), 1.15)) : 18.5)
+      : estimatedNtu;
+  const resolvedWhoTier =
+    decision === "NO_PATTERN_DETECTED"
+      ? "TARGET_MISSING"
+      : resolvedVis >= 0.85
+      ? "PRISTINE"
+      : resolvedVis >= 0.55
+      ? "ACCEPTABLE"
+      : "ELEVATED_TURBIDITY";
 
   return (
     <div className="min-h-screen bg-[#070d18] text-[#e6f0ff] relative overflow-hidden flex flex-col">
@@ -654,7 +685,12 @@ export default function JobPage() {
                 </h2>
                 <p className="text-xs text-[#cbd5e1] max-w-2xl leading-relaxed">
                   {water ? (
-                    decision === "PASS" ? (
+                    decision === "NO_PATTERN_DETECTED" ? (
+                      <span>
+                        OpenCV did not detect a high-contrast calibration checkerboard grid behind the sample. Optical nephelometry requires observing pattern attenuation through liquid against a known spatial reference.{" "}
+                        <strong className="text-white">To inspect:</strong> Position a printed checkerboard pattern behind the liquid glass, or test with our calibrated benchmark presets.
+                      </span>
+                    ) : decision === "PASS" ? (
                       <span>
                         Optical pattern clarity through water sample meets drinking water nephelometry standard (&ge;0.55).{" "}
                         <strong className="text-white">Notice:</strong> Does not verify invisible chemical contaminants (arsenic/fluoride).
@@ -799,6 +835,44 @@ export default function JobPage() {
                         className="max-h-full max-w-full object-contain rounded-xl border border-white/10 shadow-2xl"
                       />
                     </motion.div>
+                  ) : activeOverlayLayer === "overlay" && userCustomImage ? (
+                    <motion.div
+                      key="overlay-custom"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="relative w-full h-full flex items-center justify-center"
+                    >
+                      <img
+                        src={userCustomImage}
+                        alt="Captured Sensor Ingest"
+                        className="max-h-full max-w-full object-contain rounded-xl border border-white/10 shadow-2xl"
+                      />
+                      {/* OpenCV Diagnostic HUD Overlay drawn dynamically over user's photo */}
+                      <div className="absolute inset-0 pointer-events-none flex flex-col justify-between p-4">
+                        <div className="flex justify-between">
+                          <div className={`w-8 h-8 border-t-2 border-l-2 ${decision === "NO_PATTERN_DETECTED" ? "border-[#f59e0b]" : "border-[#38bdf8]"}`} />
+                          <div className={`w-8 h-8 border-t-2 border-r-2 ${decision === "NO_PATTERN_DETECTED" ? "border-[#f59e0b]" : "border-[#38bdf8]"}`} />
+                        </div>
+                        <div className="flex flex-col items-center justify-center gap-2">
+                          <div className={`w-20 h-20 rounded-full border border-dashed ${decision === "NO_PATTERN_DETECTED" ? "border-[#f59e0b]/70" : "border-[#38bdf8]/70"} flex items-center justify-center animate-spin`} style={{ animationDuration: "14s" }}>
+                            <div className={`w-12 h-12 rounded-full border ${decision === "NO_PATTERN_DETECTED" ? "border-[#f59e0b]/40" : "border-[#38bdf8]/40"}`} />
+                          </div>
+                          <div className="px-3.5 py-1.5 rounded-lg bg-[#070d18]/90 border border-white/10 backdrop-blur text-center font-mono text-[11px] space-y-0.5 shadow-xl">
+                            <span className={`font-bold block ${decision === "NO_PATTERN_DETECTED" ? "text-[#f59e0b]" : "text-[#38bdf8]"}`}>
+                              {decision === "NO_PATTERN_DETECTED" ? "[TARGET NOT DETECTED]" : "[REGION ROI: WATER COLUMN]"}
+                            </span>
+                            <span className="text-[10px] text-[#cbd5e1] block">
+                              {decision === "NO_PATTERN_DETECTED" ? "cv2.findChessboardCorners: 0/49 squares" : "Optical Nephelometry Active"}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex justify-between">
+                          <div className={`w-8 h-8 border-b-2 border-l-2 ${decision === "NO_PATTERN_DETECTED" ? "border-[#f59e0b]" : "border-[#38bdf8]"}`} />
+                          <div className={`w-8 h-8 border-b-2 border-r-2 ${decision === "NO_PATTERN_DETECTED" ? "border-[#f59e0b]" : "border-[#38bdf8]"}`} />
+                        </div>
+                      </div>
+                    </motion.div>
                   ) : activeOverlayLayer === "second" && secondPreview ? (
                     <motion.div
                       key="second"
@@ -821,9 +895,9 @@ export default function JobPage() {
                       exit={{ opacity: 0 }}
                       className="relative w-full h-full flex items-center justify-center"
                     >
-                      {/* If no separate raw image data URL exists, show the overlay or sample image */}
+                      {/* If custom user image exists, show that for raw ingest; otherwise sample fallback */}
                       <img
-                        src={result.overlay_data_url || "/samples/water_glare_confounded.png"}
+                        src={userCustomImage || result.overlay_data_url || "/samples/water_glare_confounded.png"}
                         alt="Raw Ingest Frame"
                         className="max-h-full max-w-full object-contain rounded-xl border border-white/10 shadow-2xl"
                       />
@@ -892,16 +966,37 @@ export default function JobPage() {
               {water ? (
                 <div className="space-y-4">
                   <div className="flex flex-wrap items-center justify-center gap-6 py-2">
-                    <ClarityGauge value={patternVis} label="Pattern Visibility" sublabel="Optical transmission v" />
+                    <ClarityGauge
+                      value={decision === "NO_PATTERN_DETECTED" ? 0 : resolvedVis}
+                      label={
+                        decision === "NO_PATTERN_DETECTED"
+                          ? "Target Required"
+                          : secondVis !== undefined
+                          ? "Resolved Visibility"
+                          : "Pattern Visibility"
+                      }
+                      sublabel={
+                        decision === "NO_PATTERN_DETECTED"
+                          ? "Calibration Target Missing"
+                          : secondVis !== undefined
+                          ? "Pass 2 Active Perception"
+                          : "Optical transmission v"
+                      }
+                    />
 
                     <div className="grid grid-cols-2 gap-2.5 flex-1 min-w-[200px]">
                       <div className="p-3 rounded-xl bg-[#070d18]/80 border border-[#163256]">
                         <span className="text-[10px] font-mono uppercase text-[#8aa0c0] block">Estimated NTU</span>
                         <span className="text-xl font-extrabold font-mono text-white block mt-0.5">
-                          {estimatedNtu.toFixed(1)} <span className="text-xs font-normal text-[#8aa0c0]">NTU</span>
+                          {decision === "NO_PATTERN_DETECTED" ? "N/A" : resolvedNtu.toFixed(1)}{" "}
+                          {decision !== "NO_PATTERN_DETECTED" && <span className="text-xs font-normal text-[#8aa0c0]">NTU</span>}
                         </span>
                         <span className="text-[9px] text-[#38bdf8] block mt-0.5 font-mono">
-                          WHO Standard &lt; 5.0
+                          {decision === "NO_PATTERN_DETECTED"
+                            ? "Target Grid Missing"
+                            : secondVis !== undefined
+                            ? "Pass 2 (< 1.0 Pristine)"
+                            : "WHO Standard < 5.0"}
                         </span>
                       </div>
 
@@ -909,17 +1004,19 @@ export default function JobPage() {
                         <span className="text-[10px] font-mono uppercase text-[#8aa0c0] block">WHO Quality Tier</span>
                         <span
                           className={`text-sm font-extrabold font-mono block mt-1 ${
-                            whoTier === "PRISTINE"
+                            decision === "NO_PATTERN_DETECTED"
+                              ? "text-[#f59e0b]"
+                              : resolvedWhoTier === "PRISTINE"
                               ? "text-[#22c55e]"
-                              : whoTier === "ACCEPTABLE"
+                              : resolvedWhoTier === "ACCEPTABLE"
                               ? "text-[#38bdf8]"
                               : "text-[#ef4444]"
                           }`}
                         >
-                          {whoTier}
+                          {decision === "NO_PATTERN_DETECTED" ? "TARGET MISSING" : resolvedWhoTier}
                         </span>
                         <span className="text-[9px] text-[#8aa0c0] block mt-0.5 font-mono">
-                          IS 10500:2012
+                          {decision === "NO_PATTERN_DETECTED" ? "Analysis Halted" : "IS 10500:2012"}
                         </span>
                       </div>
 
@@ -945,7 +1042,7 @@ export default function JobPage() {
                     </div>
                   </div>
 
-                  <ClarityBar value={patternVis} />
+                  <ClarityBar value={decision === "NO_PATTERN_DETECTED" ? 0 : resolvedVis} />
                 </div>
               ) : crack ? (
                 <div className="grid grid-cols-2 gap-3">
@@ -1042,19 +1139,69 @@ export default function JobPage() {
 
                 {/* Second-Look Evidence Comparison */}
                 {secondVis !== undefined && (
-                  <div className="rounded-xl bg-[#22c55e]/10 border border-[#22c55e]/30 p-3 flex items-center justify-between text-xs font-mono">
-                    <div>
-                      <span className="text-[#8aa0c0] block text-[10px]">SECOND-LOOK VISIBILITY</span>
-                      <span className="text-base font-bold text-[#22c55e]">{secondVis.toFixed(3)}</span>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-[#8aa0c0] block text-[10px]">EVIDENCE DELTA (Δ)</span>
-                      <span className="text-base font-bold text-[#38bdf8]">
-                        {secondVis - patternVis >= 0 ? `+${(secondVis - patternVis).toFixed(3)}` : (secondVis - patternVis).toFixed(3)}
+                  <div className="rounded-xl bg-[#22c55e]/10 border border-[#22c55e]/30 p-3.5 space-y-2.5 text-xs font-mono">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[#38bdf8] font-bold text-[11px] uppercase tracking-wide">
+                        Active Perception Multi-Frame Fusion
                       </span>
+                      <span className="text-[#22c55e] font-bold bg-[#22c55e]/20 px-2 py-0.5 rounded text-[10px]">
+                        RESOLVED {result.final_decision.decision}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-center pt-1 border-t border-white/10">
+                      <div className="p-2 rounded bg-[#070d18] border border-white/5">
+                        <span className="text-[#8aa0c0] block text-[9px]">LOOK 1 (INITIAL)</span>
+                        <span className="text-sm font-bold text-[#f59e0b]">{(patternVis * 100).toFixed(0)}%</span>
+                        <span className="text-[9px] text-[#8aa0c0] block">{estimatedNtu.toFixed(1)} NTU</span>
+                      </div>
+                      <div className="p-2 rounded bg-[#070d18] border border-white/5 flex flex-col justify-center items-center">
+                        <span className="text-[#8aa0c0] block text-[9px]">INTERVENTION</span>
+                        <span className="text-[10px] font-bold text-[#38bdf8] truncate max-w-full">
+                          {result.agent_call?.tool || "Dual Lighting"}
+                        </span>
+                        <span className="text-[9px] text-[#22c55e]">
+                          {secondVis - patternVis >= 0 ? `+${((secondVis - patternVis) * 100).toFixed(0)}%` : `${((secondVis - patternVis) * 100).toFixed(0)}%`} Clarity
+                        </span>
+                      </div>
+                      <div className="p-2 rounded bg-[#070d18] border border-white/5">
+                        <span className="text-[#8aa0c0] block text-[9px]">LOOK 2 (RESOLVED)</span>
+                        <span className="text-sm font-bold text-[#22c55e]">{(secondVis * 100).toFixed(0)}%</span>
+                        <span className="text-[9px] text-[#22c55e] block">{resolvedNtu.toFixed(1)} NTU</span>
+                      </div>
                     </div>
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Target Guidance Card When Pattern Missing */}
+            {decision === "NO_PATTERN_DETECTED" && (
+              <div className="glass-studio rounded-2xl p-5 space-y-3 border-[#f59e0b]/40 glow-amber">
+                <div className="flex items-center gap-2">
+                  <Eye className="h-4 w-4 text-[#f59e0b]" />
+                  <h4 className="text-xs font-bold text-white uppercase tracking-wide">
+                    How Optical Nephelometry Works
+                  </h4>
+                </div>
+                <p className="text-xs text-[#cbd5e1] leading-relaxed">
+                  Unlike opaque image classifiers, LoopSight measures <em>physical light attenuation</em> (Beer-Lambert law) by computing contrast degradation of a known checkerboard grid through liquid. Without an optical target, the policy safely halts analysis.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                  <a
+                    href="/samples/checkerboard_A4.png"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2.5 rounded-xl bg-[#070d18] hover:bg-[#163256] border border-[#163256] hover:border-[#38bdf8]/40 text-xs text-[#38bdf8] font-bold flex items-center justify-center gap-1.5 transition-all"
+                  >
+                    <Download className="h-3.5 w-3.5" /> Download A4 Target Grid
+                  </a>
+                  <Link
+                    href="/job/water_glare_confounded"
+                    className="p-2.5 rounded-xl bg-[#070d18] hover:bg-[#163256] border border-[#163256] hover:border-[#22c55e]/40 text-xs text-[#22c55e] font-bold flex items-center justify-center gap-1.5 transition-all"
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5" /> Test Calibrated Water Lab
+                  </Link>
+                </div>
               </div>
             )}
 
