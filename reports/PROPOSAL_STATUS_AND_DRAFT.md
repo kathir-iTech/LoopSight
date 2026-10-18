@@ -1,28 +1,30 @@
-# Proposal status and owner-review draft
+# Grant proposal clarification and archived optional draft
 
-Checked 18 October 2026 against the public
-[OpenCV overview](https://opencv.org/opencv-ai-competition-2026/).
-The owner confirms Devpost registration. Proposal submission remains unverified.
-The Devpost challenge/rules pages are blocked by remote protection, and the
-owner's profile plus Jotform are blocked by this environment's running network
-policy. No account session, private dashboard or form was accessed or submitted.
+Corrected 18 October 2026 after successfully reading the current Devpost Rules,
+overview, official grant announcement and linked grant form.
 
-The overview's participation terms say **“Submit the cloud compute grant
-proposal.”** Its Phase 2 description refers to teams that submitted the required
-proposal. It also says teams not selected for a grant remain eligible for prizes.
-These statements distinguish submitting a proposal from receiving credits.
-Registration alone does not establish completion of the proposal requirement.
-The governing Devpost rules and organizers must resolve any ambiguity or late
-proposal availability; this document cannot confirm eligibility.
+**A grant proposal is not required to remain eligible for prizes.** The
+[official linked form](https://www.jotform.com/form/262145877145059) says:
 
-The official overview links its proposal buttons to
-https://www.jotform.com/form/262145877145059. The owner should check the original
-registration/proposal confirmation and private dashboard. If no receipt exists,
-ask organizers whether the required proposal was included in registration or
-needs separate action. Do not assume a currently accessible form accepts late
-entries. No messages to organizers have been sent.
+> Submissions for AWS Grants are closed. All teams, even those who were not
+> selected or did not submit a proposal, are still eligible for all prizes!
 
-## Draft content for review, not a submitted proposal
+The earlier instruction to verify a proposal receipt as a prerequisite was wrong
+and is withdrawn. The general OpenCV page contains conflicting proposal wording;
+the linked form explicitly resolves the no-proposal case. The
+[official announcement](https://opencv26.devpost.com/updates/46417-aws-compute-grant-notifications-have-been-sent)
+also confirms the same prizes and judging rubric for teams without a grant.
+
+See [the complete rules recheck](COMPETITION_RULES_RECHECK.md) for the actual
+submission checklist, deadline discrepancy, optional award paths and other
+published inconsistencies. The October 7–14 dates on Devpost apply to grant
+recipient check-ins. They are not the final submission deadline. The exact date
+when the grant form closed was not established.
+
+Registration is owner-confirmed. No private dashboard was accessed and no form
+was submitted. No late grant application is needed for the build path.
+
+## Archived optional grant draft — not required and not submitted
 
 **Team/project:** LoopSight. Team member identities and biographies must be
 supplied by the owner; they have not been invented here.

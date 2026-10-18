@@ -64,10 +64,11 @@ of silently clearing images after enhancement.
 ## Strict working assessment
 
 The official [OpenCV overview](https://opencv.org/opencv-ai-competition-2026/)
-was accessible and confirms the weights below. Documentation is a technical
-report/reproducibility criterion here; visual presentation and video are not
-scored. Devpost's governing rules remain inaccessible, so eligibility and any
-differences must be checked there. These are provisional engineering judgments,
+was accessible and confirms the weights below. The current Devpost Rules were subsequently read successfully; see the
+[full recheck](COMPETITION_RULES_RECHECK.md). The official rubric combines
+documentation and presentation in one 10-point criterion. For the owner's
+presentation-excluded assessment, omit that whole criterion and normalize
+the remaining 90 points. These are provisional engineering judgments,
 not jury scores or winning probabilities, and use no private other-user projects.
 
 | Criterion | Current evidence-based assessment |
@@ -76,9 +77,9 @@ not jury scores or winning probabilities, and use no private other-user projects
 | Innovation | 11/20 |
 | Real-world impact | 6/20 |
 | Functional user experience | 8/10 |
-| Technical documentation/reproducibility | 7/10 |
+| Combined documentation/presentation | Excluded at owner request |
 | Responsible cloud delivery | 4/10 |
-| **Working total** | **59/100** |
+| **Technical subtotal / normalized assessment** | **52/90 ≈ 58/100** |
 
 The strongest improvements are correctness, retained evidence and failure
 handling. Independent effectiveness, real impact and verified cloud operation
@@ -86,11 +87,12 @@ still dominate the gap. A 95+ assessment is not supported by current evidence.
 
 ## Remaining work, in execution order
 
-1. **Competition requirement:** registration is owner-confirmed; proposal receipt
-   is not. The official overview explicitly requires the grant proposal, while
-   grant selection is not required for prizes. See
-   [proposal status and review draft](PROPOSAL_STATUS_AND_DRAFT.md). No form was
-   submitted or private Devpost session accessed.
+1. **Competition requirement resolved:** registration is owner-confirmed. The
+   official linked grant form explicitly says teams that **did not submit a
+   proposal** remain eligible for all prizes. No proposal task blocks building.
+   See [the current rules recheck](COMPETITION_RULES_RECHECK.md). Final entry
+   requirements and individual eligibility still apply; no private session or
+   form submission was performed.
 2. **AWS persistence and deployment:** implement shared session/capture storage
    (private objects plus metadata), scoped IAM and expiry/deletion. Local SQLite
    does not share `/tmp` between Lambda instances. Surface DynamoDB failures and
@@ -138,5 +140,7 @@ alone is not that contribution. COOL integration has not been implemented.
 Environment setup/start instructions and required public-source domains are
 saved as a draft. Draft saving does not apply network access or publish the
 environment. The owner must review/save and publish in environment settings to
-activate those changes. The running proxy still blocks the Devpost profile and
-proposal form; remote Devpost event protection also blocks rules retrieval.
+activate those changes. On the subsequent rules recheck, the Devpost overview,
+Rules, Updates, grant announcement and linked grant form all returned HTTP 200.
+Earlier public-page access failures are no longer current; authenticated account
+access remains unverified.

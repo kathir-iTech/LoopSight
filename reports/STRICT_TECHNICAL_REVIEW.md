@@ -3,6 +3,8 @@
 > Historical foundation-stage audit. See [BUILD_PROGRESS.md](BUILD_PROGRESS.md)
 > for subsequent image-unit, persistent-recapture and exact-budget evaluation
 > implementation, updated verified official sources, assessment and open gaps.
+> [The later rules recheck](COMPETITION_RULES_RECHECK.md) confirms that a grant
+> proposal is not required for prize eligibility; public Devpost access now works.
 
 Review date: 18 October 2026. Target confirmed by the owner: OpenCV AI Competition 2026 powered by AWS, https://opencv26.devpost.com/. Presentation/video quality is excluded from this assessment.
 

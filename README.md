@@ -97,6 +97,6 @@ verifies retained first-pass evidence, pixel-identical capture retrieval and
 duplicate rejection. It does not validate physical measurements.
 
 Collect genuine independent data using the
-[capture protocol](data/captures/README.md). Competition proposal requirements,
-the owner's confirmed registration and a reviewable proposal draft are recorded
-[here](reports/PROPOSAL_STATUS_AND_DRAFT.md). No proposal was submitted by this agent.
+[capture protocol](data/captures/README.md). The [current rules recheck](reports/COMPETITION_RULES_RECHECK.md) confirms that
+teams without a grant proposal remain eligible for all prizes, and lists final
+submission requirements. No proposal or final entry was submitted by this agent.
