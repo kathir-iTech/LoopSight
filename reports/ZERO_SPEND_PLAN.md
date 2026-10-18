@@ -2,8 +2,11 @@
 
 The owner has no AWS account and requires ₹0 out-of-pocket spending during the
 competition and afterward. This overrides earlier broad deployment authorization.
-Do not request a card, create a paid account, upgrade a plan, or provision
-chargeable resources under that earlier authorization.
+The owner subsequently agreed to provide a card privately if needed for signup;
+the ₹0 constraint remains in force. Card entry does not authorize a paid plan,
+verification debit, subscription, upgrade or chargeable resource deployment.
+Do not request card details in chat or provision resources under the earlier
+broad authorization. Confirm current signup terms before recommending card entry.
 
 ## Verified competition requirements
 
@@ -49,11 +52,24 @@ here. Do not present assumptions about those terms as checked facts.
 ## Prepared organizer question — not sent
 
 > I am registered for the OpenCV AI Competition 2026 and building LoopSight.
-> I have no AWS account and cannot incur any charge, card authorization hold or
-> later billing liability. Is an organizer-managed, card-free AWS sandbox
+> I have no AWS account and cannot incur any charge or later billing liability.
+> Is an organizer-managed, card-free AWS sandbox
 > available for a meaningful project component? If so, please confirm permitted
 > services, expiry and that no payment method or billing liability is required
 > from me. If unavailable, is there an explicitly approved alternative that
 > satisfies the AWS requirement? I understand the grant application is closed.
 
 Do not send this message without an explicit instruction to contact organizers.
+
+## Owner-assisted signup next step
+
+The owner can inspect the official [AWS Free Tier page](https://aws.amazon.com/free/)
+and its account-plan selection privately. Before payment entry, collect the
+non-sensitive plan/billing text for review. Do not choose a Paid Plan, a paid
+support subscription, or accept a verification charge under the zero-spend
+constraint. Check any bank authorization/foreign-exchange terms as well.
+
+The latest retry of the Free Tier, FAQ, account-plan and account-management
+documentation still returned proxy CONNECT 403. A saved allowlist is not proof
+that runtime access is active. No current Free Plan billing protection or
+service compatibility has been verified and the deployment gate remains closed.
