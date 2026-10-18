@@ -19,6 +19,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY services/inference/cv ${LAMBDA_TASK_ROOT}/cv
 COPY services/inference/agent ${LAMBDA_TASK_ROOT}/agent
 COPY services/inference/storage.py ${LAMBDA_TASK_ROOT}/storage.py
+COPY services/inference/demo_golden.py ${LAMBDA_TASK_ROOT}/demo_golden.py
+COPY services/inference/sample_frames.py ${LAMBDA_TASK_ROOT}/sample_frames.py
 COPY services/inference/main.py ${LAMBDA_TASK_ROOT}/main.py
 
 # The handler that Mangum exposes: main.handler wraps the FastAPI app.

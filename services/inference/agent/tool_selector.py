@@ -13,10 +13,19 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 import json
+import math
 
 from cv.first_pass import FirstPassResult, ALL_TOOLS
 
 ALLOWED_TOOLS = set(ALL_TOOLS)
+MAX_TOOL_CHAIN_LENGTH = 4
+
+TOOL_ARGUMENT_LIMITS = {
+    "reinspect_roi": {"scale": (1.0, 4.0)},
+    "inpaint_specular_glare": {"radius": (1.0, 15.0)},
+    "skeletonize_crack_metrology": {"mm_per_px": (0.0001, 10.0)},
+    "measure_edge_continuity": {"low": (0, 255), "high": (0, 255)},
+}
 
 MCP_TOOL_DESCRIPTORS = [
     {
@@ -76,6 +85,21 @@ MCP_TOOL_DESCRIPTORS = [
     },
 ]
 
+# Declare the image inputs that the RPC endpoint actually accepts.
+for _descriptor in MCP_TOOL_DESCRIPTORS:
+    _schema = _descriptor["inputSchema"]
+    _properties = _schema["properties"]
+    _properties.update({
+        "sample_id": {"type": "string", "description": "Synthetic benchmark ID; used only when no image is supplied."},
+        "image_base64": {"type": "string", "description": "Base64-encoded uploaded image (10 MiB maximum decoded)."},
+    })
+    for _name, (_minimum, _maximum) in TOOL_ARGUMENT_LIMITS.get(_descriptor["name"], {}).items():
+        _properties[_name].update({"minimum": _minimum, "maximum": _maximum})
+    if _descriptor["name"] == "track_across_frames":
+        _properties["second_image_base64"] = {"type": "string", "description": "A distinct second captured image."}
+        _schema["required"] = ["second_image_base64"]
+    _schema["additionalProperties"] = False
+
 
 @dataclass
 class ToolCall:
@@ -90,7 +114,7 @@ class InvalidToolCallError(Exception):
     something outside the whitelist or malformed."""
 
 
-def validate_tool_call(raw: dict) -> ToolCall:
+def validate_tool_call(raw: dict, allowed_tools: set[str] | None = None) -> ToolCall:
     """Enforce the whitelist a SECOND time here, independent of whatever
     schema validation happened upstream. Supports both atomic tools and
     multi-tool composite chains."""
@@ -111,17 +135,33 @@ def validate_tool_call(raw: dict) -> ToolCall:
     else:
         raise InvalidToolCallError(f"tool '{tool}' is not in the whitelist {sorted(ALLOWED_TOOLS)}")
 
+    if not 1 <= len(chain) <= MAX_TOOL_CHAIN_LENGTH or len(set(chain)) != len(chain):
+        raise InvalidToolCallError("tool chains require one to four distinct tools")
+    permitted = ALLOWED_TOOLS if allowed_tools is None else ALLOWED_TOOLS & allowed_tools
     for t in chain:
-        if t not in ALLOWED_TOOLS:
+        if t not in permitted:
             raise InvalidToolCallError(f"tool '{t}' in chain is not in the whitelist {sorted(ALLOWED_TOOLS)}")
 
     reason_code = raw.get("reason_code")
-    if not isinstance(reason_code, str) or not reason_code:
-        raise InvalidToolCallError("reason_code must be a non-empty string")
+    if not isinstance(reason_code, str) or not reason_code.strip() or len(reason_code) > 256:
+        raise InvalidToolCallError("reason_code must contain 1 to 256 characters")
     arguments = raw.get("arguments", {})
     if not isinstance(arguments, dict):
         raise InvalidToolCallError("arguments must be a dict")
-    return ToolCall(tool=tool, arguments=arguments, reason_code=reason_code, tool_chain=chain)
+    limits = {key: bounds for name in chain for key, bounds in TOOL_ARGUMENT_LIMITS.get(name, {}).items()}
+    for name, value in arguments.items():
+        if name not in limits:
+            raise InvalidToolCallError(f"unsupported argument '{name}' for selected tools")
+        low, high = limits[name]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise InvalidToolCallError(f"argument '{name}' must be a finite number")
+        if not low <= value <= high:
+            raise InvalidToolCallError(f"argument '{name}' must be between {low} and {high}")
+        if name in ("low", "high") and not isinstance(value, int):
+            raise InvalidToolCallError(f"argument '{name}' must be an integer")
+    if "measure_edge_continuity" in chain and arguments.get("low", 30) >= arguments.get("high", 100):
+        raise InvalidToolCallError("Canny low threshold must be below high threshold")
+    return ToolCall(tool=" -> ".join(chain), arguments=arguments, reason_code=reason_code, tool_chain=chain)
 
 
 def _build_prompt(first_pass: FirstPassResult) -> str:
@@ -153,44 +193,31 @@ def _build_prompt(first_pass: FirstPassResult) -> str:
 
 
 def call_gemini(first_pass: FirstPassResult, api_key: str, model: str = "gemini-3.6-flash") -> ToolCall:
-    """Live Gemini call bounded by GEMINI_TIMEOUT_SECONDS with model fallback."""
+    """One bounded Gemini request; failures use the local policy fallback."""
     from google import genai  # deferred import
 
     timeout_sec = float(os.environ.get("GEMINI_TIMEOUT_SECONDS", "15").strip() or 15)
+    if not math.isfinite(timeout_sec) or not 0.1 <= timeout_sec <= 20:
+        raise ValueError("GEMINI_TIMEOUT_SECONDS must be between 0.1 and 20")
     client = genai.Client(
         api_key=api_key,
-        http_options={"timeout": timeout_sec},
+        http_options={"timeout": round(timeout_sec * 1000), "retry_options": {"attempts": 1}},
     )
     prompt = _build_prompt(first_pass)
-    candidates = [model]
-    for fallback in ["gemini-3.6-flash", "gemini-3-flash-preview", "gemini-2.5-flash", "gemini-3.1-flash-lite-preview"]:
-        if fallback not in candidates:
-            candidates.append(fallback)
-
-    last_exc: Exception | None = None
-    for m in candidates:
-        try:
-            response = client.models.generate_content(
-                model=m,
-                contents=[{"text": prompt}],
-                config={"response_mime_type": "application/json"},
-            )
-            raw = json.loads(response.text)
-            return validate_tool_call(raw)
-        except Exception as exc:  # noqa: BLE001
-            msg = str(exc)
-            if "NOT_FOUND" in msg or "UNAVAILABLE" in msg or "404" in msg or "503" in msg:
-                last_exc = exc
-                continue
-            raise
-    if last_exc is not None:
-        raise last_exc
-    raise RuntimeError("call_gemini: no model candidates tried")
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=[{"text": prompt}],
+            config={"response_mime_type": "application/json"},
+        )
+        return validate_tool_call(json.loads(response.text), allowed_tools=set(first_pass.allowed_tools))
+    finally:
+        client.close()
 
 
 def select_tool_mock(first_pass: FirstPassResult, fixture: dict) -> ToolCall:
     """Deterministic offline/CI tool selection path validated through the same whitelist."""
-    return validate_tool_call(fixture)
+    return validate_tool_call(fixture, allowed_tools=set(first_pass.allowed_tools))
 
 
 def select_tool(
@@ -201,11 +228,16 @@ def select_tool(
     default_tool: str = "reinspect_roi",
 ) -> ToolCall:
     """Top-level entry point with deterministic fallback."""
+    permitted = set(first_pass.allowed_tools) & ALLOWED_TOOLS
+    if default_tool not in permitted:
+        if not permitted:
+            raise InvalidToolCallError("no tools permitted for this inspection")
+        default_tool = sorted(permitted)[0]
     try:
         if mock_fixture is not None:
             return select_tool_mock(first_pass, mock_fixture)
         if api_key is not None:
-            return call_gemini(first_pass, api_key)
+            return call_gemini(first_pass, api_key, model=os.environ.get("GEMINI_MODEL", "gemini-3.6-flash"))
         raise InvalidToolCallError("no api_key or mock_fixture provided")
     except InvalidToolCallError:
         return ToolCall(

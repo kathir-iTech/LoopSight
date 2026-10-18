@@ -28,10 +28,11 @@ from pathlib import Path
 from typing import Dict, Optional
 
 def _load_dotenv():
+    parents = Path(__file__).resolve().parents
     candidates = [
-        Path(__file__).resolve().parents[3] / ".env",
+        *([parents[3] / ".env"] if len(parents) > 3 else []),
         Path.cwd() / ".env",
-        Path(__file__).resolve().parent.parent.parent / ".env",
+        *([parents[2] / ".env"] if len(parents) > 2 else []),
     ]
     seen = set()
     for cand in candidates:
@@ -64,7 +65,7 @@ import cv2
 import numpy as np
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from cv.first_pass import run_first_pass, PROFILES  # type: ignore
 from cv.tools import TOOL_REGISTRY  # type: ignore
@@ -316,8 +317,7 @@ def _run_tool(
         return execute_tool_chain(chain, frame, roi, reference=reference, **args)
 
     if tool_name == "track_across_frames":
-        fn = TOOL_REGISTRY["reinspect_roi"]
-        return fn(frame, reference, roi, scale=2.0)
+        raise ValueError("track_across_frames requires a second captured image")
 
     fn = TOOL_REGISTRY.get(tool_name)
     if fn is None:
@@ -434,7 +434,12 @@ async def mcp_json_rpc(request: Request):
 
     req_id = body.get("id")
     method = body.get("method")
-    params = body.get("params", {}) or {}
+    params = body.get("params", {})
+    if not isinstance(params, dict):
+        return JSONResponse({"jsonrpc": "2.0", "id": req_id,
+                             "error": {"code": -32602, "message": "params must be an object"}})
+    if "id" not in body:
+        return Response(status_code=202)
 
     if method == "initialize":
         return JSONResponse({
@@ -465,8 +470,11 @@ async def mcp_json_rpc(request: Request):
 
     elif method == "tools/call":
         tool_name = params.get("name")
-        args = params.get("arguments", {}) or {}
-        if tool_name not in ALLOWED_TOOLS:
+        args = params.get("arguments", {})
+        if not isinstance(args, dict):
+            return JSONResponse({"jsonrpc": "2.0", "id": req_id,
+                                 "error": {"code": -32602, "message": "arguments must be an object"}})
+        if not isinstance(tool_name, str) or tool_name not in ALLOWED_TOOLS:
             return JSONResponse(
                 status_code=200,
                 content={
@@ -476,15 +484,23 @@ async def mcp_json_rpc(request: Request):
                 },
             )
 
+        from agent.tool_selector import validate_tool_call, InvalidToolCallError
+        tool_args = {key: value for key, value in args.items()
+                     if key not in {"sample_id", "image_base64", "second_image_base64"}}
+        try:
+            validate_tool_call({"tool": tool_name, "arguments": tool_args, "reason_code": "MCP_CALL"})
+        except InvalidToolCallError as e:
+            return JSONResponse({"jsonrpc": "2.0", "id": req_id,
+                                 "error": {"code": -32602, "message": str(e)}})
+
         sample_id = args.get("sample_id", "water_glare_confounded")
         image_b64 = args.get("image_base64")
-        if image_b64:
+        if image_b64 is not None:
             try:
-                img_bytes = base64.b64decode(image_b64)
-                arr = np.frombuffer(img_bytes, dtype=np.uint8)
-                frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                if frame is None:
-                    raise ValueError("imdecode returned None")
+                if not isinstance(image_b64, str) or len(image_b64) > 4 * ((MAX_UPLOAD_BYTES + 2) // 3):
+                    raise ValueError("encoded image exceeds upload limit")
+                img_bytes = base64.b64decode(image_b64, validate=True)
+                frame = _decode_image(img_bytes)
             except Exception as e:
                 return JSONResponse({
                     "jsonrpc": "2.0",
@@ -494,14 +510,24 @@ async def mcp_json_rpc(request: Request):
         else:
             try:
                 frame, _, _ = _generate_sample_frames(sample_id)
-            except Exception:
-                frame, _, _ = _generate_sample_frames("water_glare_confounded")
+            except (KeyError, TypeError):
+                return JSONResponse({"jsonrpc": "2.0", "id": req_id,
+                                     "error": {"code": -32602, "message": "unknown sample_id"}})
 
         roi = (0, 0, frame.shape[1], frame.shape[0])
         fn = TOOL_REGISTRY[tool_name]
         try:
             if tool_name == "track_across_frames":
-                tool_res = fn([frame, frame], roi)
+                second_b64 = args.get("second_image_base64")
+                if not isinstance(second_b64, str) or not second_b64:
+                    raise ValueError("track_across_frames requires second_image_base64")
+                if len(second_b64) > 4 * ((MAX_UPLOAD_BYTES + 2) // 3):
+                    raise ValueError("second image exceeds upload limit")
+                second_bytes = base64.b64decode(second_b64, validate=True)
+                second_frame = _decode_image(second_bytes)
+                if second_frame.shape == frame.shape and np.array_equal(frame, second_frame):
+                    raise ValueError("second captured image must differ from the first")
+                tool_res = fn([frame, second_frame], roi)
             elif tool_name in ("reinspect_roi", "compare_to_reference"):
                 tool_res = fn(frame, None, roi)
             elif tool_name == "inpaint_specular_glare":
@@ -515,6 +541,8 @@ async def mcp_json_rpc(request: Request):
 
             reg = tool_res.region
             telemetry = {
+                "execution_mode": "live_opencv" if image_b64 is not None else "synthetic_benchmark",
+                "measurement_basis": "uncalibrated_image_heuristics",
                 "tool": tool_res.tool,
                 "notes": tool_res.notes,
                 "pattern_visibility": round(float(getattr(reg, "pattern_visibility", 0.0)), 4),
@@ -597,7 +625,7 @@ SAMPLE_CATALOG = [
 
 def _generate_sample_frames(sample_id: str) -> tuple[np.ndarray, Optional[np.ndarray], str]:
     """Generate real BGR image arrays for the requested benchmark sample ID."""
-    from tests.synthetic import (
+    from sample_frames import (
         make_glare_confounded_water,
         make_stratified_turbid_water,
         make_backlit_recovery_pair,
@@ -638,6 +666,7 @@ def _execute_inspection_pipeline(
     second_frame_lighting: str = "backlight",
     original_job_id: Optional[str] = None,
     decode_ms: float = 0.5,
+    execution_mode: str = "live_opencv",
 ) -> tuple[str, dict]:
     """Shared real OpenCV 5 + Agent + Policy execution pipeline used by both
     POST /inspect and POST /inspect/sample/{sample_id}."""
@@ -677,6 +706,8 @@ def _execute_inspection_pipeline(
         agent_ms = (time.perf_counter() - t_agent) * 1000
         agent_call_dict = {
             "tool": tool_call.tool,
+            "selector": ("deterministic_fallback" if tool_call.reason_code.startswith("FALLBACK_")
+                         else "gemini" if gemini_key else "deterministic_policy"),
             "tool_chain": getattr(tool_call, "tool_chain", [tool_call.tool]),
             "reason_code": tool_call.reason_code,
         }
@@ -718,7 +749,8 @@ def _execute_inspection_pipeline(
                         arguments={},
                         reason_code="BORDERLINE_TWO_LIGHTINGS_DIFFERENT_LIGHTING_AVAILABLE",
                     )
-                    agent_call_dict = {"tool": tool_call.tool, "reason_code": tool_call.reason_code}
+                    agent_call_dict = {"tool": tool_call.tool, "reason_code": tool_call.reason_code,
+                                       "selector": "deterministic_policy"}
                 frame_info_for_result = frame_metas
                 if second_seq:
                     FRAME_SEQ_COUNTER = max(FRAME_SEQ_COUNTER, second_seq)
@@ -813,6 +845,11 @@ def _execute_inspection_pipeline(
     )
 
     result: dict = {
+        "provenance": {
+            "execution_mode": execution_mode,
+            "opencv_version": cv2.__version__,
+            "measurement_basis": "uncalibrated_image_heuristics",
+        },
         "status": first_pass.status,
         "inspection_profile": profile_name,
         "regions": regions_json,
@@ -909,6 +946,7 @@ async def inspect_sample(sample_id: str):
         first_lighting="ambient",
         second_frame_lighting="backlight",
         decode_ms=0.4,
+        execution_mode="synthetic_benchmark",
     )
     return JSONResponse({"job_id": job_id, "sample_id": sample_id, "inspection_profile": profile_name})
 
@@ -920,6 +958,7 @@ async def inspect(request: Request):
 
     golden = demo_golden.resolve_golden_from_request(form)
     if golden is not None:
+        golden = {**golden, "provenance": {"execution_mode": "demo_fixture"}}
         golden_job_id = uuid.uuid4().hex[:8]
         try:
             store.save(golden_job_id, golden)
@@ -939,6 +978,7 @@ async def inspect(request: Request):
                     profile_name=prof,
                     second_frame=frame2,
                     decode_ms=0.4,
+                    execution_mode="synthetic_benchmark",
                 )
                 return JSONResponse({"job_id": job_id})
             except KeyError:
