@@ -1,5 +1,9 @@
 Deployment paused: owner requires zero out-of-pocket spending, including future costs.
 
+CURRENT OWNER DECISION: OpenCV competition work and AWS setup are cancelled.
+Do not resume signup, identity verification, connection or deployment. Preserve
+this gate and the prepared files as historical work. See reports/PROJECT_DIRECTION.md.
+
 The current ECR/Lambda/S3/Secrets Manager/CloudWatch template can incur charges.
 Free-tier credits, budget alerts and concurrency limits do not establish a
 permanent zero-charge guarantee for this architecture.

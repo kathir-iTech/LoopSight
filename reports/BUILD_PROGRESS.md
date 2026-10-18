@@ -1,4 +1,9 @@
 # Spending constraint update — 18 October 2026
+
+**Superseding owner decision:** stop this OpenCV entry and all AWS setup;
+preserve LoopSight for another suitable competition. The deployment gate stays
+closed. AWS-specific tasks below are historical, not current instructions.
+See [project direction and replacement-event criteria](PROJECT_DIRECTION.md).
 The owner requires ₹0 spending during and after the competition and has no AWS
 account. Earlier deployment authorization does not authorize chargeable resource
 creation. The AWS deployment helper is now blocked before provider commands;

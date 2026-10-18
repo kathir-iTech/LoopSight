@@ -1,5 +1,9 @@
 # AWS deployment and verification
 
+**Current direction: the owner stopped the OpenCV entry and cancelled AWS setup.**
+These files remain as implementation history. Do not resume the connection or
+deployment workflow below; see [project direction](../../reports/PROJECT_DIRECTION.md).
+
 **Deployment is paused under the owner's hard ₹0 spending constraint.**
 The tracked `ZERO_SPEND_ONLY` gate makes the deployment helper exit before
 provider commands. The commands below describe the prepared architecture;
