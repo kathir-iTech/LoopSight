@@ -397,3 +397,74 @@ TOOL_REGISTRY = {
     "analyze_vertical_stratification": analyze_vertical_stratification,
     "skeletonize_crack_metrology": skeletonize_crack_metrology,
 }
+
+
+def execute_tool_chain(
+    chain: list[str],
+    frame: np.ndarray,
+    roi: tuple[int, int, int, int],
+    reference: np.ndarray | None = None,
+    second_frame: np.ndarray | None = None,
+    **kwargs,
+) -> ToolResult:
+    """Execute an ordered sequence of OpenCV 5 active-perception tools (Composite DAG).
+    Intermediate image representations pass through sequential geometric and photometric
+    transformations, tracking cumulative evidence across multi-confounder scenarios."""
+    if not chain:
+        raise ValueError("execute_tool_chain: chain cannot be empty")
+
+    current_frame = frame.copy()
+    notes_list: list[str] = []
+    final_region = None
+
+    for idx, tool_name in enumerate(chain):
+        fn = TOOL_REGISTRY.get(tool_name)
+        if fn is None:
+            continue
+
+        if tool_name == "track_across_frames":
+            frames = [current_frame, second_frame] if second_frame is not None else [current_frame]
+            res = fn(frames, roi)
+        elif tool_name in ("reinspect_roi", "compare_to_reference"):
+            res = fn(current_frame, reference, roi)
+        elif tool_name == "inpaint_specular_glare":
+            rad = float(kwargs.get("radius", 5.0))
+            res = fn(current_frame, roi, radius=rad)
+            # Apply inpaint to working frame crop so subsequent tools operate on glare-free image
+            x, y, w, h = roi
+            crop = current_frame[y:y + h, x:x + w]
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+            glare_mask = (gray >= 238).astype(np.uint8) * 255
+            if 0 < np.count_nonzero(glare_mask) < int(gray.size * 0.65):
+                k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+                inp = cv2.inpaint(crop, cv2.dilate(glare_mask, k, iterations=1), rad, cv2.INPAINT_TELEA)
+                current_frame[y:y + h, x:x + w] = inp
+        elif tool_name == "rectify_perspective_homography":
+            res = fn(current_frame, roi)
+        elif tool_name == "analyze_vertical_stratification":
+            res = fn(current_frame, roi)
+        elif tool_name == "skeletonize_crack_metrology":
+            mm = float(kwargs.get("mm_per_px", 0.10))
+            res = fn(current_frame, roi, mm_per_px=mm)
+        elif tool_name == "measure_edge_continuity":
+            low = int(kwargs.get("low", 30))
+            high = int(kwargs.get("high", 100))
+            res = fn(current_frame, roi, low=low, high=high)
+        else:
+            try:
+                res = fn(current_frame, roi, **kwargs)
+            except Exception:
+                res = fn(current_frame, reference, roi)
+
+        final_region = res.region
+        notes_list.append(f"Step {idx + 1} ({tool_name}): {res.notes}")
+
+    if final_region is None:
+        final_region = measure_region(frame, reference, roi)
+
+    return ToolResult(
+        tool=" -> ".join(chain),
+        region=final_region,
+        notes=" | ".join(notes_list),
+    )
+

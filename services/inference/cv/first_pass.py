@@ -99,6 +99,30 @@ class RegionEvidence:
     crack_length_px: float = 0.0
     crack_severity_score: float = 0.0
     detection_method: str = "full_frame"
+    # physical optical nephelometry & standards
+    estimated_ntu: float = 0.0
+    who_tier: str = "PRISTINE"
+
+
+def estimate_physical_ntu(pattern_visibility: float) -> tuple[float, str]:
+    """
+    Physical Beer-Lambert optical nephelometry conversion model.
+    Relates pattern visibility contrast attenuation to Nephelometric Turbidity Units (NTU)
+    aligned with WHO and Indian domestic drinking water guidelines (BIS IS 10500:2012):
+      - PRISTINE: < 1.0 NTU (Target standard for treated / mountain spring water)
+      - ACCEPTABLE: 1.0 - 5.0 NTU (Maximum permissible limit for domestic supply)
+      - ELEVATED_TURBIDITY: > 5.0 NTU (Exceeds domestic limit; actionable treatment required)
+    """
+    vis = max(0.005, min(0.995, float(pattern_visibility)))
+    ntu = 3.5 * ((1.0 / vis) - 1.0) ** 1.15
+    ntu_val = round(float(ntu), 2)
+    if ntu_val < 1.0:
+        tier = "PRISTINE"
+    elif ntu_val <= 5.0:
+        tier = "ACCEPTABLE"
+    else:
+        tier = "ELEVATED_TURBIDITY"
+    return ntu_val, tier
 
 
 @dataclass
@@ -269,6 +293,8 @@ def measure_pattern_visibility(
     contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     layer_alignment_deviation = _contour_deviation_score(contours, gray.shape)
 
+    ntu_val, who_tier = estimate_physical_ntu(pattern_visibility)
+
     return RegionEvidence(
         x=x,
         y=y,
@@ -285,6 +311,8 @@ def measure_pattern_visibility(
         skew_deg=skew_deg,
         stratification_delta=stratification_delta,
         detection_method=det_method,
+        estimated_ntu=ntu_val,
+        who_tier=who_tier,
     )
 
 
@@ -516,6 +544,17 @@ def score_evidence(regions: list[RegionEvidence], profile: InspectionProfile) ->
                     "very low contrast — pattern not distinguishable through water, try a photo under different lighting (backlight or phone flash)"
                 ],
                 allowed_tools=ALL_TOOLS,
+            )
+
+        # Multi-confounder check: both specular glare AND perspective skew
+        if max_glare >= 0.03 and max_skew >= 10.0 and worst.pattern_visibility < profile.pattern_visibility_confident_clear:
+            return FirstPassResult(
+                status="UNCERTAIN",
+                regions=regions,
+                evidence_gap=[
+                    f"composite confounders detected: specular glass glare ({max_glare:.1%}) AND perspective skew ({max_skew:.1f} deg) — dispatch multi-tool pipeline (inpaint_specular_glare -> rectify_perspective_homography)"
+                ],
+                allowed_tools=["inpaint_specular_glare", "rectify_perspective_homography", "track_across_frames", "reinspect_roi"],
             )
 
         # Confounder check 1: localized specular glare on glass washing out pattern

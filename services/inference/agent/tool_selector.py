@@ -11,7 +11,7 @@ OpenCV AI Competition 2026 Agentic Vision & MCP track.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 
 from cv.first_pass import FirstPassResult, ALL_TOOLS
@@ -82,6 +82,7 @@ class ToolCall:
     tool: str
     arguments: dict
     reason_code: str
+    tool_chain: list[str] = field(default_factory=list)
 
 
 class InvalidToolCallError(Exception):
@@ -91,19 +92,36 @@ class InvalidToolCallError(Exception):
 
 def validate_tool_call(raw: dict) -> ToolCall:
     """Enforce the whitelist a SECOND time here, independent of whatever
-    schema validation happened upstream."""
+    schema validation happened upstream. Supports both atomic tools and
+    multi-tool composite chains."""
     if not isinstance(raw, dict):
         raise InvalidToolCallError(f"tool call must be a dict, got {type(raw)}")
+
     tool = raw.get("tool")
-    if tool not in ALLOWED_TOOLS:
+    tool_chain_raw = raw.get("tool_chain")
+
+    if isinstance(tool, str) and (" -> " in tool or "," in tool):
+        delims = " -> " if " -> " in tool else ","
+        chain = [t.strip() for t in tool.split(delims) if t.strip()]
+    elif isinstance(tool_chain_raw, list) and tool_chain_raw:
+        chain = [str(t).strip() for t in tool_chain_raw if str(t).strip()]
+        tool = chain[0] if len(chain) == 1 else " -> ".join(chain)
+    elif isinstance(tool, str) and tool in ALLOWED_TOOLS:
+        chain = [tool]
+    else:
         raise InvalidToolCallError(f"tool '{tool}' is not in the whitelist {sorted(ALLOWED_TOOLS)}")
+
+    for t in chain:
+        if t not in ALLOWED_TOOLS:
+            raise InvalidToolCallError(f"tool '{t}' in chain is not in the whitelist {sorted(ALLOWED_TOOLS)}")
+
     reason_code = raw.get("reason_code")
     if not isinstance(reason_code, str) or not reason_code:
         raise InvalidToolCallError("reason_code must be a non-empty string")
     arguments = raw.get("arguments", {})
     if not isinstance(arguments, dict):
         raise InvalidToolCallError("arguments must be a dict")
-    return ToolCall(tool=tool, arguments=arguments, reason_code=reason_code)
+    return ToolCall(tool=tool, arguments=arguments, reason_code=reason_code, tool_chain=chain)
 
 
 def _build_prompt(first_pass: FirstPassResult) -> str:
