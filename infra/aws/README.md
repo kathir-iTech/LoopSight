@@ -1,5 +1,12 @@
 # AWS deployment and verification
 
+**Deployment is paused under the owner's hard ₹0 spending constraint.**
+The tracked `ZERO_SPEND_ONLY` gate makes the deployment helper exit before
+provider commands. The commands below describe the prepared architecture;
+they are not currently authorized to create chargeable resources. Do not remove
+the gate or enter payment details without resolving the zero-charge access
+dependency in [the spending plan](../../reports/ZERO_SPEND_PLAN.md).
+
 This configuration is prepared for account review and execution. It is not
 evidence that an AWS deployment exists. Run commands from the repository root.
 

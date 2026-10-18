@@ -4,6 +4,10 @@ set -euo pipefail
 # Reviewed CloudFormation deployment; requires authenticated AWS and an ARM64 builder.
 # Does not print application tokens or modify Vercel settings.
 cd "$(dirname "$0")/.."
+if [[ -f infra/aws/ZERO_SPEND_ONLY ]]; then
+  echo "AWS deployment is paused under the owner's hard zero-spend policy. This template can incur charges. See infra/aws/ZERO_SPEND_ONLY and reports/ZERO_SPEND_PLAN.md." >&2
+  exit 1
+fi
 command -v aws >/dev/null
 command -v docker >/dev/null
 command -v git >/dev/null

@@ -1,0 +1,17 @@
+Deployment paused: owner requires zero out-of-pocket spending, including future costs.
+
+The current ECR/Lambda/S3/Secrets Manager/CloudWatch template can incur charges.
+Free-tier credits, budget alerts and concurrency limits do not establish a
+permanent zero-charge guarantee for this architecture.
+
+scripts/deploy_lambda.sh refuses to run while this file exists, before invoking
+AWS, Docker or Git. This gate blocks this helper only; it is not an AWS account
+billing cap and cannot prevent charges from other tools or existing resources.
+
+Do not remove the gate, create an account, enter payment details, upgrade an AWS
+plan or provision resources based on earlier broad deployment authorization.
+First establish a verified no-charge access arrangement consistent with the
+owner's constraint and review the deployment architecture for that arrangement.
+
+No AWS account deployment has been performed by this project session.
+See reports/ZERO_SPEND_PLAN.md for the evidence and remaining dependency.

@@ -1,3 +1,11 @@
+# Spending constraint update — 18 October 2026
+The owner requires ₹0 spending during and after the competition and has no AWS
+account. Earlier deployment authorization does not authorize chargeable resource
+creation. The AWS deployment helper is now blocked before provider commands;
+see [the zero-spend plan](ZERO_SPEND_PLAN.md). Actual AWS execution remains a
+competition requirement and depends on verified no-charge access. Local work
+can continue; no AWS resources have been provisioned in this session.
+
 # LoopSight build progress and remaining evidence
 
 Updated 18 October 2026. Presentation/video quality is excluded. This is the

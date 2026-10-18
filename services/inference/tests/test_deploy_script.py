@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 
 import pytest
@@ -38,7 +39,13 @@ if tool=='docker' and args[0]=='login':sys.stdin.read()
     archive = tmp_path / "verified-image.tar.gz"
     archive.write_bytes(b"mock archive; no actual Docker invocation")
     repo = Path(__file__).resolve().parents[3]
-    result = subprocess.run(["bash", str(repo / "scripts/deploy_lambda.sh")], cwd=repo,
+    # Exercise image validation in an isolated mocked deployment checkout.
+    # The real checkout remains blocked by its owner's zero-spend policy.
+    isolated = tmp_path / "checkout"
+    (isolated / "scripts").mkdir(parents=True)
+    script = isolated / "scripts/deploy_lambda.sh"
+    shutil.copyfile(repo / "scripts/deploy_lambda.sh", script)
+    result = subprocess.run(["bash", str(script)], cwd=isolated,
                             env={**os.environ, "PATH": str(directory) + os.pathsep + os.environ["PATH"],
                                  "CI_IMAGE_ARCHIVE": str(archive), "TEST_COMMAND_LOG": str(log),
                                  "TEST_IMAGE_ARCH": architecture, "TEST_IMAGE_REVISION": revision,
@@ -50,3 +57,21 @@ if tool=='docker' and args[0]=='login':sys.stdin.read()
     assert bool(cloud_writes) is success
     assert bool(pushes) is success
     assert not any(call["tool"] == "docker" and call["args"][0] == "buildx" for call in calls)
+
+
+def test_owner_zero_spend_policy_blocks_real_script_before_any_provider_command(tmp_path):
+    directory = tmp_path / "bin"
+    directory.mkdir()
+    log = tmp_path / "provider-commands"
+    for tool in ["git", "aws", "docker"]:
+        command = directory / tool
+        command.write_text('#!/bin/sh\nprintf "%s\\n" "$0" >> "$TEST_COMMAND_LOG"\nexit 99\n')
+        command.chmod(0o755)
+    repo = Path(__file__).resolve().parents[3]
+    result = subprocess.run(["bash", str(repo / "scripts/deploy_lambda.sh")], cwd=tmp_path,
+                            env={**os.environ, "PATH": str(directory) + os.pathsep + os.environ["PATH"],
+                                 "TEST_COMMAND_LOG": str(log)},
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 1
+    assert "hard zero-spend policy" in result.stderr
+    assert not log.exists()
