@@ -1,5 +1,7 @@
 # LoopSight v2 — Canonical Project Status
 
+> **Superseded status record.** The historical 97/100 self-rating and the physical/calibration/deployment assertions below are not verified jury evidence. Use [STRICT_TECHNICAL_REVIEW.md](reports/STRICT_TECHNICAL_REVIEW.md) for current findings, executed checks, foundation fixes and remaining work. All 46 committed benchmark PNGs were reproduced byte-for-byte by the synthetic generator.
+
 > **Last updated:** 2026-10-18 (LoopSight v2.5 Production & Active-Perception Overhaul)
 > **Test Suite:** `52 passed, 1 skipped` (11 test modules including `test_v2_metrology_and_mcp.py`)
 > **Strict-Jury Rating:** **`97 / 100`** (1st-Place Contender & Agentic Vision Award Target)

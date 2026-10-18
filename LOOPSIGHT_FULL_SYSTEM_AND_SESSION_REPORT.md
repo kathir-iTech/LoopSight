@@ -1,5 +1,7 @@
 # LoopSight v2 — Comprehensive System Architecture & Session Trajectory Report
 
+> **Historical handover, not verified submission evidence.** The current audit disproved the dataset's physical-capture provenance and found deployment/benchmark defects. Claims below about certified NTU, potability, structural safety, measured AWS hardware timings and a 95+ rating must not be relied upon. See [the current technical review](reports/STRICT_TECHNICAL_REVIEW.md).
+
 ```
 ========================================================================================
 PROJECT:           LoopSight v2 — Active-Perception Optical Nephelometry & Metrology

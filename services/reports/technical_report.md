@@ -1,5 +1,7 @@
 # LoopSight v2 — Technical Report (OpenCV AI Competition 2026)
 
+> **Superseded technical draft.** The physical-data/calibration and cloud claims below require correction. Current evidence and the remaining validation plan are in [STRICT_TECHNICAL_REVIEW.md](../../reports/STRICT_TECHNICAL_REVIEW.md). Synthetic benchmark performance is not physical accuracy or certification.
+
 > **Status:** Complete & verified against executed code, 49 automated tests, and the 40-sample multi-condition benchmark dataset (`data/self_captured/`). Zero `[PENDING]` placeholders remain.
 >
 > **Verified Stack:** OpenCV 5 (`opencv-python-headless>=5.0.0`), FastAPI, Mangum (AWS Lambda ARM64), Model Context Protocol (`mcp/1.0` tool discovery), Google Gemini (`gemini-3.6-flash` bounded selector with deterministic fallback), SQLite write-through + DynamoDB `JobStore`, Next.js 15.5.23, React 19, Framer Motion, Tailwind CSS 4, jsPDF.

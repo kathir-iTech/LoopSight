@@ -1,4 +1,6 @@
-# data/ — Self-captured dataset
+# data/ — Capture guide and synthetic fixtures
+
+> Provenance correction: all 46 committed PNGs under `self_captured/` are generated synthetic fixtures, not physical photographs. Keep genuine captures separately with preparation/session/device metadata. See [the current review](../reports/STRICT_TECHNICAL_REVIEW.md).
 
 ## Structure (expected)
 

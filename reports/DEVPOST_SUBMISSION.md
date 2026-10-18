@@ -1,4 +1,5 @@
 # LoopSight v2 — Devpost Submission Package
+> **Unverified draft — not ready to submit.** Correct synthetic-data provenance, physical calibration, cloud deployment, MCP interoperability and benchmark claims using [the technical review](STRICT_TECHNICAL_REVIEW.md) before using this narrative. No certified water/structural measurement claim is supported by the current evidence.
 ## OpenCV AI Competition 2026 (powered by AWS)
 
 > **Project Name:** LoopSight v2 — Active-Perception Optical Nephelometry & Metrology Engine  

@@ -1,5 +1,7 @@
 # LoopSight — Submission Checklist
 
+> **Historical checklist — checked boxes are not current verification.** The audit found synthetic data described as physical, an unequal benchmark budget and deployment packaging defects. Revalidate this checklist against [the current review](STRICT_TECHNICAL_REVIEW.md) before submission. The live site and official rules could not be checked from the present restricted network.
+
 > Master checklist of everything the OpenCV AI Competition 2026 requires before hitting submit.
 > Derived from Devpost Official Rules (spec Section 2) + `LoopSight_Project_Spec.md` + `services/reports/technical_report.md` §8.
 > Update this file as each item is verified with **real output** (not summaries). Judges get at least two independent, conflict-free scores averaged; tie-break is Technical Execution → Real-World Impact → extra judge.

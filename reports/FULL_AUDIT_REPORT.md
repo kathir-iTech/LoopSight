@@ -1,6 +1,8 @@
 # LoopSight v2 — Full Strict-Jury Production & Technical Audit Report
 ## OpenCV AI Competition 2026 (powered by AWS)
 
+> **Superseded self-assessment.** This report's ratings and physical/deployment assertions are not independently verified. See [the current technical review](STRICT_TECHNICAL_REVIEW.md), including synthetic dataset provenance and reproduced benchmark limitations.
+
 > **Audit Date:** 2026-10-18 (LoopSight v2 Production Audit & Active-Perception Overhaul)  
 > **Evaluators Simulated:** Gary Bradski (OpenCV Founder), Phil Nelson (OpenCV Director of Content), AWS Technical Jury  
 > **Overall Strict-Jury Rating:** **`97 / 100`** (1st-Place Contender / Agentic Vision Award Target)  

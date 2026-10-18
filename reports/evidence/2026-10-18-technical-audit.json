@@ -1,0 +1,95 @@
+{
+  "review_date": "2026-10-18",
+  "audited_baseline_commit": "3fc2e38758373ddbb5f90b93af9c065d00aabc75",
+  "dataset_verification": {
+    "primary_samples": 40,
+    "png_files": 46,
+    "byte_identical_regenerated_files": 46,
+    "source_kind": "synthetic"
+  },
+  "water_baseline_results": {
+    "A": {
+      "accuracy": 0.55,
+      "trigger_rate": 0.0,
+      "resolution_rate": 0.0,
+      "false_trigger": 0.0,
+      "missed_trigger": 0.6,
+      "conditional_benefit": 0.0
+    },
+    "B": {
+      "accuracy": 0.4,
+      "trigger_rate": 0.6,
+      "resolution_rate": 0.5,
+      "false_trigger": 0.0,
+      "missed_trigger": 0.0,
+      "conditional_benefit": -0.25
+    },
+    "B2": {
+      "accuracy": 0.45,
+      "trigger_rate": 0.4,
+      "resolution_rate": 0.375,
+      "false_trigger": 0.0,
+      "missed_trigger": 0.2,
+      "conditional_benefit": -0.1667
+    },
+    "C": {
+      "accuracy": 1.0,
+      "trigger_rate": 0.6,
+      "resolution_rate": 0.75,
+      "false_trigger": 0.0,
+      "missed_trigger": 0.0,
+      "conditional_benefit": 0.75
+    }
+  },
+  "crack_baseline_results": {
+    "A": {
+      "accuracy": 0.6667,
+      "trigger_rate": 0.0,
+      "resolution_rate": 0.0,
+      "false_trigger": 0.0,
+      "missed_trigger": 0.3333,
+      "conditional_benefit": 0.0
+    },
+    "B": {
+      "accuracy": 1.0,
+      "trigger_rate": 0.3333,
+      "resolution_rate": 1.0,
+      "false_trigger": 0.0,
+      "missed_trigger": 0.0,
+      "conditional_benefit": 1.0
+    },
+    "B2": {
+      "accuracy": 0.6667,
+      "trigger_rate": 0.0,
+      "resolution_rate": 0.0,
+      "false_trigger": 0.0,
+      "missed_trigger": 0.3333,
+      "conditional_benefit": 0.0
+    },
+    "C": {
+      "accuracy": 1.0,
+      "trigger_rate": 0.3333,
+      "resolution_rate": 1.0,
+      "false_trigger": 0.0,
+      "missed_trigger": 0.0,
+      "conditional_benefit": 1.0
+    }
+  },
+  "foundation_validation": {
+    "backend_passed": 72,
+    "backend_live_gemini_skipped": 1,
+    "frontend_api_passed": 9,
+    "production_build": "passed",
+    "local_production_smoke": "passed"
+  },
+  "not_verified": [
+    "current_official_rules",
+    "public_vercel_deployment",
+    "actual_arm64_container_execution",
+    "aws_deployment",
+    "live_gemini",
+    "physical_ntu_calibration",
+    "physical_crack_scale_calibration",
+    "independent_field_accuracy"
+  ]
+}

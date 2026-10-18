@@ -1,5 +1,7 @@
 # LoopSight v2 — Active-Perception Optical Nephelometry & Spatial Metrology Engine
 
+> Current status: [strict technical review and ten-day build plan](reports/STRICT_TECHNICAL_REVIEW.md). The committed benchmark images are generated synthetic fixtures. Physical NTU/mm calibration, real-world accuracy and the live AWS deployment remain unverified. This project does not certify drinking-water potability or structural safety.
+
 **LoopSight v2** is an uncertainty-triggered **OpenCV 5 Active-Perception & Model Context Protocol (MCP) Vision Engine** built for the **OpenCV AI Competition 2026 (powered by AWS)**.
 
 Instead of treating a single camera frame as final—or letting an LLM hallucinate visual verdicts—LoopSight v2 uses **deterministic OpenCV 5 metrology** on Pass 1 to quantify both the primary signal and physical confounders (specular glass glare, perspective skew, vertical sediment stratification, dim ambient lighting, and surface shadows). When Pass 1 is `UNCERTAIN`, a bounded agent selects from **8 whitelisted OpenCV 5 tools** to acquire a materially different second observation before a deterministic policy (`cv/policy.py`) renders the final verdict.
@@ -19,8 +21,8 @@ Instead of treating a single camera frame as final—or letting an LLM hallucina
   - `reinspect_roi` (2x `cv2.INTER_CUBIC` super-sampling)
   - `measure_edge_continuity` (high-sensitivity Canny 30/100 re-evaluation)
   - `compare_to_reference` (histogram-equalized reference check)
-- **Proven Positive Conditional Benefit (`+0.7500` on Water, `+1.0000` on Crack Metrology):**
-  Across the 40-sample multi-condition dataset in `data/self_captured/`, LoopSight v2's adaptive policy (`Experiment C`, **100.0% accuracy**) decisively outperforms the single-pass baseline (`Experiment A`, **55.0%**), fixed 2x repeat (`Experiment B`, **40.0%**), and matched-observation-budget control (`Experiment B2`, **45.0%**).
+- **Reproducible Synthetic Benchmark:**
+  The 40 generated primary water fixtures reproduce A=55%, B=40%, B2=45%, C=100%. B2 does not currently match C's realized observation budget. On six generated crack fixtures, both the fixed two-pass baseline and adaptive policy reach 100%. These results do not establish physical measurement accuracy or an adaptive advantage on independent real samples.
 - **Responsible-AI Safety Guards:**
   - Enforces **"Turbidity ≠ Potability"** across all UI screens and PDF exports: clear water can still contain invisible arsenic, fluoride, or nitrates.
   - Returns `NO_PATTERN_DETECTED` when no reference checkerboard is present on water uploads rather than guessing on invalid input.
@@ -52,12 +54,21 @@ Open `http://localhost:3000` to upload images, use live camera capture with pre-
 ### 3. Run Tests & Evaluation Harness
 
 ```bash
-# Run all 50 automated tests (49 passing, 1 live-Gemini skipped unless GEMINI_API_KEY is set)
+# Backend regression tests; live Gemini requires separate configuration
 python -m pytest services/inference/tests -v
 
-# Regenerate 40-image benchmark dataset, calibrate thresholds, and run Experiments A/B/B2/C
+# Synthetic generation overwrites data/self_captured; preserve genuine captures elsewhere.
 python services/inference/scripts/generate_benchmark_dataset.py
 python services/inference/scripts/calibrate_thresholds.py data/self_captured
 python services/inference/scripts/run_experiments.py data/self_captured --profile water_turbidity_v1
 python services/inference/scripts/run_experiments.py --profile structural_crack_metrology_v1
 ```
+
+Frontend API regression checks and production build, from `apps/web`:
+
+```bash
+npm test
+npm run build
+```
+
+Configure `INFERENCE_API_URL` on Vercel to use the real backend. Missing or failed inference returns an error; it never selects a canned verdict. Set `DEMO_MODE=golden` only for explicitly labeled fixture demonstrations. Result JSON, the result page and PDF report retain execution-source labels. Fonts are bundled locally.
