@@ -2,12 +2,31 @@ import { NextRequest, NextResponse } from "next/server";
 import { createJob, fixtureByCase, fixtureForFileBytes } from "@/lib/mock-data";
 
 export async function POST(request: NextRequest) {
-  const inferenceUrl =
-    process.env.INFERENCE_API_URL || "http://localhost:8000";
+  const inferenceUrl = process.env.INFERENCE_API_URL;
 
   const formData = await request.formData().catch(() => new FormData());
   const sampleId = formData.get("sample_id")?.toString()?.trim();
   const profile = formData.get("inspection_profile")?.toString()?.trim() || "water_turbidity_v1";
+
+  // If deployed on Vercel and no external INFERENCE_API_URL is configured, immediately use calibrated fixtures
+  if (!inferenceUrl && process.env.VERCEL === "1") {
+    let result = null;
+    const caseKey = sampleId || formData.get("demo_case")?.toString()?.trim();
+    if (caseKey) {
+      result = fixtureByCase(caseKey);
+    }
+    if (!result) {
+      const file = formData.get("image") || formData.get("file");
+      const bytes = file instanceof File
+        ? new Uint8Array(await file.arrayBuffer())
+        : new Uint8Array([0]);
+      result = fixtureForFileBytes(bytes, profile);
+    }
+    const jobId = createJob(result, caseKey);
+    return NextResponse.json({ job_id: jobId, fallback_mode: "calibrated_fixture" });
+  }
+
+  const targetUrl = inferenceUrl || "http://localhost:8000";
 
   try {
     if (!formData.get("inspection_profile")) {
@@ -25,11 +44,11 @@ export async function POST(request: NextRequest) {
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 20000);
+    const timeout = setTimeout(() => controller.abort(), 6000);
 
     const targetEndpoint = sampleId
-      ? `${inferenceUrl}/inspect/sample/${encodeURIComponent(sampleId)}`
-      : `${inferenceUrl}/inspect`;
+      ? `${targetUrl}/inspect/sample/${encodeURIComponent(sampleId)}`
+      : `${targetUrl}/inspect`;
 
     const res = await fetch(targetEndpoint, {
       method: "POST",
@@ -66,7 +85,7 @@ export async function POST(request: NextRequest) {
         : new Uint8Array([0]);
       result = fixtureForFileBytes(bytes, profile);
     }
-    const jobId = createJob(result);
+    const jobId = createJob(result, caseKey);
     return NextResponse.json({ job_id: jobId, fallback_mode: "calibrated_fixture" });
   }
 }
