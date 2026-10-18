@@ -1,0 +1,10 @@
+{
+  "synthetic_transport_check": "passed",
+  "new_backend_instance_verified": true,
+  "first_decision": "REVIEW",
+  "follow_up_decision": "PASS",
+  "observations_used": 2,
+  "raw_capture_round_trip": "pixel_identical",
+  "duplicate_status": 422,
+  "physical_accuracy_validated": false
+}
