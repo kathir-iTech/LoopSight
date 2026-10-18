@@ -10,9 +10,10 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "LoopSight — Check your water before you drink it",
+  title: "LoopSight v2 — Active-Perception Optical Nephelometry & Metrology",
   description:
-    "Household drinking-water turbidity screening — photograph a printed pattern through water, get a clarity check. Flags cloudy water for follow-up. Not a substitute for a lab test. OpenCV 5 + agentic second look under different lighting.",
+    "Household drinking-water turbidity screening and structural crack metrology. Flags cloudy water for follow-up. OpenCV 5 + MCP active perception under different lighting.",
+  manifest: "/manifest.json",
 };
 
 export default function RootLayout({

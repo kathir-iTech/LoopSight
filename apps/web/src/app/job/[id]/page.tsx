@@ -788,27 +788,41 @@ export default function JobPage() {
                       <div className="space-y-4">
                         <div className="flex flex-wrap gap-6 justify-center py-2">
                           <ClarityGauge value={pv ?? 0} label="Pattern visibility" sublabel="clarity through water" />
-                          <div className="grid grid-cols-2 gap-3 min-w-[240px]">
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 min-w-[280px]">
                             <div className="p-2.5 rounded-xl bg-[#0f2942]/50 border border-[#1e3a5f]">
-                              <p className="text-[#8aa0c0] text-[11px] uppercase">Sharpness</p>
+                              <p className="text-[#8aa0c0] text-[10px] uppercase font-medium">Estimated NTU</p>
+                              <p className="font-mono font-bold text-white text-base mt-0.5">
+                                {(ev.estimated_ntu ?? (pv ? Math.max(0.1, 3.5 * Math.pow((1 / Math.max(0.01, pv)) - 1, 1.15)) : 0)).toFixed(1)} NTU
+                              </p>
+                              <p className="text-[9px] text-[#38bdf8]">WHO standard &lt; 5.0</p>
+                            </div>
+                            <div className="p-2.5 rounded-xl bg-[#0f2942]/50 border border-[#1e3a5f]">
+                              <p className="text-[#8aa0c0] text-[10px] uppercase font-medium">WHO Quality Tier</p>
+                              <p className="font-mono font-semibold text-xs mt-1 text-[#38bdf8]">
+                                {ev.who_tier || (pv && pv >= 0.85 ? "PRISTINE" : pv && pv >= 0.55 ? "ACCEPTABLE" : "ELEVATED")}
+                              </p>
+                              <p className="text-[9px] text-[#8aa0c0]">IS 10500:2012</p>
+                            </div>
+                            <div className="p-2.5 rounded-xl bg-[#0f2942]/50 border border-[#1e3a5f]">
+                              <p className="text-[#8aa0c0] text-[10px] uppercase font-medium">Sharpness</p>
                               <p className="font-mono font-semibold text-white text-sm mt-0.5">
                                 {(ev.pattern_sharpness ?? 0).toFixed(3)}
                               </p>
                             </div>
                             <div className="p-2.5 rounded-xl bg-[#0f2942]/50 border border-[#1e3a5f]">
-                              <p className="text-[#8aa0c0] text-[11px] uppercase">Local Contrast</p>
+                              <p className="text-[#8aa0c0] text-[10px] uppercase font-medium">Local Contrast</p>
                               <p className="font-mono font-semibold text-white text-sm mt-0.5">
                                 {(ev.local_contrast ?? ev.edge_continuity ?? 0).toFixed(3)}
                               </p>
                             </div>
                             <div className="p-2.5 rounded-xl bg-[#0f2942]/50 border border-[#1e3a5f]">
-                              <p className="text-[#8aa0c0] text-[11px] uppercase">Specular Glare</p>
+                              <p className="text-[#8aa0c0] text-[10px] uppercase font-medium">Specular Glare</p>
                               <p className="font-mono font-semibold text-[#f59e0b] text-sm mt-0.5">
                                 {((ev.glare_ratio ?? 0) * 100).toFixed(1)}%
                               </p>
                             </div>
                             <div className="p-2.5 rounded-xl bg-[#0f2942]/50 border border-[#1e3a5f]">
-                              <p className="text-[#8aa0c0] text-[11px] uppercase">Stratification Δ</p>
+                              <p className="text-[#8aa0c0] text-[10px] uppercase font-medium">Stratification Δ</p>
                               <p className="font-mono font-semibold text-[#38bdf8] text-sm mt-0.5">
                                 {(ev.stratification_delta ?? 0).toFixed(3)}
                               </p>
@@ -873,14 +887,35 @@ export default function JobPage() {
               </CardHeader>
               <CardContent>
                 <div className="rounded-xl bg-[#38bdf8]/10 border border-[#38bdf8]/20 p-4">
-                  <p className="text-xs uppercase tracking-widest text-[#38bdf8] mb-3">Whitelisted OpenCV 5 Tool Call</p>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <span className="inline-flex items-center px-3 py-1.5 rounded-xl bg-[#0a1628] border border-[#1e3a5f] font-mono text-sm text-[#e6f0ff]">
-                      {result.agent_call.tool}
-                    </span>
-                    <span className="text-[#5a7aa0]">→</span>
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-xs uppercase tracking-widest text-[#38bdf8]">Whitelisted OpenCV 5 Tool Call</p>
+                    {result.agent_call.tool_chain && result.agent_call.tool_chain.length > 1 && (
+                      <span className="px-2.5 py-0.5 rounded-full bg-[#38bdf8]/20 border border-[#38bdf8]/30 text-[#38bdf8] text-[11px] font-mono font-medium">
+                        Composite Active Perception DAG ({result.agent_call.tool_chain.length} Steps)
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    {result.agent_call.tool_chain && result.agent_call.tool_chain.length > 1 ? (
+                      result.agent_call.tool_chain.map((t, idx) => (
+                        <div key={idx} className="flex items-center gap-2">
+                          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#0a1628] border border-[#38bdf8]/40 font-mono text-xs text-[#7dd3fc]">
+                            <span className="w-4 h-4 rounded-full bg-[#38bdf8]/20 text-[10px] flex items-center justify-center font-bold text-[#38bdf8]">{idx + 1}</span>
+                            {t}
+                          </span>
+                          {idx < (result.agent_call?.tool_chain?.length ?? 0) - 1 && (
+                            <span className="text-[#38bdf8] font-bold">→</span>
+                          )}
+                        </div>
+                      ))
+                    ) : (
+                      <span className="inline-flex items-center px-3 py-1.5 rounded-xl bg-[#0a1628] border border-[#1e3a5f] font-mono text-sm text-[#e6f0ff]">
+                        {result.agent_call.tool}
+                      </span>
+                    )}
+                    <span className="text-[#5a7aa0]">·</span>
                     <span className="text-sm text-[#8aa0c0]">
-                      reason_code:{" "}
+                      reason:{" "}
                       <span className="font-mono text-[#e6f0ff] bg-[#0f2942] px-2 py-1 rounded-lg border border-[#1e3a5f]">
                         {result.agent_call.reason_code}
                       </span>

@@ -15,6 +15,9 @@ export interface RegionEvidence {
   crack_length_px?: number;
   crack_severity_score?: number;
   detection_method?: string;
+  // physical nephelometry & standards
+  estimated_ntu?: number;
+  who_tier?: "PRISTINE" | "ACCEPTABLE" | "ELEVATED_TURBIDITY" | string;
 }
 
 export interface Region {
@@ -28,6 +31,7 @@ export interface Region {
 export interface AgentCall {
   tool: string;
   reason_code: string;
+  tool_chain?: string[];
 }
 
 export interface SecondPassRegion {
@@ -40,7 +44,9 @@ export interface SecondPassRegion {
   crack_width_mm?: number;
   crack_length_px?: number;
   crack_severity_score?: number;
-  [key: string]: number | boolean | undefined;
+  estimated_ntu?: number;
+  who_tier?: "PRISTINE" | "ACCEPTABLE" | "ELEVATED_TURBIDITY" | string;
+  [key: string]: number | boolean | string | undefined;
 }
 
 export interface SecondPass {
