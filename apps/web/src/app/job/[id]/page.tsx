@@ -186,6 +186,16 @@ export default function JobPage() {
   const [secondUploading, setSecondUploading] = useState(false);
   const [secondMode, setSecondMode] = useState<"idle" | "camera">("idle");
   const [secondError, setSecondError] = useState<string | null>(null);
+  const [secondCameraStream, setSecondCameraStream] = useState<MediaStream | null>(null);
+  const [secondCameraLoading, setSecondCameraLoading] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      if (secondCameraStream) {
+        secondCameraStream.getTracks().forEach((t) => t.stop());
+      }
+    };
+  }, [secondCameraStream]);
 
   useEffect(() => {
     let cancelled = false;
@@ -363,50 +373,67 @@ export default function JobPage() {
   );
 
   const startSecondCamera = useCallback(async () => {
+    setSecondCameraLoading(true);
+    setSecondError(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-      if (secondVideoRef.current) {
-        secondVideoRef.current.srcObject = stream;
-        secondVideoRef.current.play();
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        });
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true });
       }
+      setSecondCameraStream(stream);
       setSecondMode("camera");
-      setSecondError(null);
-    } catch {
-      setSecondError("Camera access denied or unavailable.");
+      setSecondCameraLoading(false);
+    } catch (err) {
+      console.error("Second camera error:", err);
+      setSecondCameraLoading(false);
+      setSecondError("Camera access denied or unavailable. Please upload a photo instead.");
+      toast.error("Camera unavailable");
     }
   }, []);
+
+  const stopSecondCamera = useCallback(() => {
+    if (secondCameraStream) {
+      secondCameraStream.getTracks().forEach((t) => t.stop());
+    }
+    setSecondCameraStream(null);
+    setSecondMode("idle");
+    setSecondCameraLoading(false);
+  }, [secondCameraStream]);
 
   const captureSecond = useCallback(() => {
     if (!secondVideoRef.current || !secondCanvasRef.current) return;
     const v = secondVideoRef.current;
     const c = secondCanvasRef.current;
+    if (!v.videoWidth || !v.videoHeight) {
+      toast.error("Camera feed not ready yet.");
+      return;
+    }
     c.width = v.videoWidth;
     c.height = v.videoHeight;
-    const ctx = c.getContext("2d")!;
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
     ctx.drawImage(v, 0, 0);
     c.toBlob(
       (blob) => {
         if (blob) handleSecondFileSelect(new File([blob], "capture2.jpg", { type: "image/jpeg" }));
       },
       "image/jpeg",
-      0.9
+      0.92
     );
-    (v.srcObject as MediaStream)?.getTracks().forEach((t) => t.stop());
-    setSecondMode("idle");
-  }, [handleSecondFileSelect]);
-
-  const stopSecondCamera = useCallback(() => {
-    (secondVideoRef.current?.srcObject as MediaStream)?.getTracks().forEach((t) => t.stop());
-    setSecondMode("idle");
-  }, []);
+    stopSecondCamera();
+  }, [handleSecondFileSelect, stopSecondCamera]);
 
   const resetSecond = useCallback(() => {
     if (secondPreview && secondPreview.startsWith("blob:")) URL.revokeObjectURL(secondPreview);
     setSecondPreview(null);
     setSecondFile(null);
-    setSecondMode("idle");
+    stopSecondCamera();
     setSecondError(null);
-  }, [secondPreview]);
+  }, [secondPreview, stopSecondCamera]);
 
   const handleSecondSubmit = useCallback(async () => {
     if (!secondFile || !result) return;
@@ -1081,13 +1108,31 @@ export default function JobPage() {
                 </div>
 
                 {secondMode === "camera" && (
-                  <div className="space-y-2">
-                    <video ref={secondVideoRef} className="w-full max-h-48 object-contain rounded-lg border border-[#163256] bg-black" autoPlay playsInline muted />
-                    <div className="flex gap-2">
-                      <Button onClick={captureSecond} className="flex-1 bg-[#38bdf8] text-[#070d18] font-bold text-xs">
+                  <div className="relative space-y-2 rounded-xl overflow-hidden bg-black">
+                    {secondCameraLoading && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#070d18]/90 gap-2 z-20">
+                        <RefreshCw className="h-5 w-5 text-[#38bdf8] animate-spin" />
+                        <span className="text-xs text-[#8aa0c0] font-mono">Initializing camera sensor...</span>
+                      </div>
+                    )}
+                    <video
+                      ref={(el) => {
+                        secondVideoRef.current = el;
+                        if (el && secondCameraStream && el.srcObject !== secondCameraStream) {
+                          el.srcObject = secondCameraStream;
+                          el.play().catch(() => {});
+                        }
+                      }}
+                      className="w-full max-h-48 object-contain rounded-lg border border-[#163256] bg-black"
+                      autoPlay
+                      playsInline
+                      muted
+                    />
+                    <div className="flex gap-2 p-1">
+                      <Button onClick={captureSecond} className="flex-1 bg-[#38bdf8] text-[#070d18] font-bold text-xs h-9">
                         Capture LOOK 2
                       </Button>
-                      <Button onClick={stopSecondCamera} variant="outline" className="flex-1 text-xs">
+                      <Button onClick={stopSecondCamera} variant="outline" className="flex-1 text-xs h-9">
                         Cancel
                       </Button>
                     </div>
