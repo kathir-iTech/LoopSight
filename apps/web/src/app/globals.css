@@ -29,7 +29,7 @@ html {
 body {
   color: var(--foreground);
   background: var(--background);
-  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  font-family: "Inter Variable", system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }

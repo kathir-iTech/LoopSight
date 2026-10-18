@@ -29,6 +29,7 @@ export interface Region {
 }
 
 export interface AgentCall {
+  selector?: "gemini" | "deterministic_policy" | "deterministic_fallback";
   tool: string;
   reason_code: string;
   tool_chain?: string[];
@@ -70,6 +71,11 @@ export interface Measurements {
 }
 
 export interface InspectionResult {
+  provenance?: {
+    execution_mode: "live_opencv" | "synthetic_benchmark" | "demo_fixture";
+    opencv_version?: string;
+    measurement_basis?: string;
+  };
   status: "CONFIDENT_PASS" | "CONFIDENT_FAIL" | "UNCERTAIN";
   inspection_profile?: string;
   regions: Region[];

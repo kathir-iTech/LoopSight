@@ -3,8 +3,7 @@ import type { InspectionResult } from "./types";
 // ============================================================================
 // LoopSight v2 — Calibrated Benchmark & Demo Resilience Fixtures
 //
-// Used only when DEMO_MODE=golden or when INFERENCE_API_URL is unreachable and
-// FAIL_CLOSED_PROD is not set. Mirrors the exact telemetry output of the real
+// Used only when DEMO_MODE=golden is explicitly configured. Mirrors example
 // OpenCV 5 backend across all 6 benchmark scenarios and 3 profiles.
 // ============================================================================
 
@@ -440,7 +439,7 @@ export function fixtureByCase(
   demoCase: string | undefined | null
 ): InspectionResult | null {
   const key = (demoCase || "").trim();
-  if (key in GOLDEN_RESULTS) {
+  if (Object.hasOwn(GOLDEN_RESULTS, key)) {
     return GOLDEN_RESULTS[key];
   }
   if (PRIMARY_KEYS.includes(key)) {
@@ -476,7 +475,7 @@ export function getJob(id: string): { id: string; result: InspectionResult; crea
 
   // 2. Check if ID directly matches any known benchmark case or legacy aliases
   const cleanKey = key.replace(/^job_/, "").replace(/^bm_/, "");
-  if (cleanKey in GOLDEN_RESULTS) {
+  if (Object.hasOwn(GOLDEN_RESULTS, cleanKey)) {
     return {
       id: key,
       result: GOLDEN_RESULTS[cleanKey],
@@ -491,28 +490,5 @@ export function getJob(id: string): { id: string; result: InspectionResult; crea
     };
   }
 
-  // 3. Check pattern hints in ID
-  if (cleanKey.startsWith("nopad") || cleanKey.includes("no_pattern")) {
-    return {
-      id: key,
-      result: GOLDEN_RESULTS.no_pattern_detected,
-      created_at: new Date().toISOString(),
-    };
-  }
-
-  // 4. Check profile hints in ID
-  if (key.includes("crack")) {
-    return {
-      id: key,
-      result: GOLDEN_RESULTS.crack_structural_fail,
-      created_at: new Date().toISOString(),
-    };
-  }
-
-  // 5. Default graceful fallback (never return 404 to judge or user on cold serverless lambdas)
-  return {
-    id: key,
-    result: GOLDEN_RESULTS.water_glare_confounded,
-    created_at: new Date().toISOString(),
-  };
+  return null;
 }

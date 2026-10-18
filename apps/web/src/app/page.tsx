@@ -1160,11 +1160,11 @@ export default function HomePage() {
               <div className="flex items-center gap-2">
                 <Sparkles className="h-4 w-4 text-[#38bdf8]" />
                 <h3 className="text-sm font-bold text-white uppercase tracking-wide">
-                  1-Click Live OpenCV 5 Benchmark Suite (No Printer Needed)
+                  Synthetic OpenCV 5 Benchmark Suite
                 </h3>
               </div>
               <p className="text-xs text-[#8aa0c0] mt-0.5">
-                Inspect physical ground-truth test cases through the real active perception engine immediately.
+                Run generated scenarios through OpenCV. These fixtures demonstrate the pipeline; they do not establish real-world accuracy.
               </p>
             </div>
 

@@ -56,5 +56,8 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Verify inspection and job API contracts
+        run: npm test
+
       - name: Build the Next.js app
         run: npm run build

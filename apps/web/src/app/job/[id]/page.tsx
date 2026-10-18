@@ -315,11 +315,13 @@ export default function JobPage() {
       doc.setTextColor(90);
       doc.text(`Job ID: ${id} | Profile: ${result.inspection_profile || "water_turbidity_v1"}`, 14, 28);
       doc.text(`Generated: ${now} | First-Pass Status: ${result.status}`, 14, 34);
+      doc.setFontSize(8);
+      doc.text(`Execution: ${result.provenance?.execution_mode || "unverified legacy"} | Physical NTU/mm units are unvalidated.`, 14, 40);
       doc.setTextColor(0);
       doc.setFontSize(12);
-      doc.text("1. First-Pass OpenCV 5 Telemetry", 14, 45);
+      doc.text("1. First-Pass OpenCV 5 Telemetry", 14, 50);
       doc.setFontSize(9);
-      let yPos = 52;
+      let yPos = 57;
       result.regions.forEach((r, i) => {
         const ev = r.evidence;
         const line1 = `Region ${i + 1} (${r.x},${r.y} ${r.w}x${r.h}): edge=${ev.edge_continuity.toFixed(3)} contrast=${(ev.local_contrast ?? 0).toFixed(3)} glare=${((ev.glare_ratio ?? 0) * 100).toFixed(1)}%`;
@@ -660,6 +662,15 @@ export default function JobPage() {
 
       {/* Main Diagnostic Workspace */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6 relative z-10">
+        <div role="note" className="rounded-xl border border-[#f59e0b]/40 bg-[#f59e0b]/10 p-4 text-sm text-[#fcd34d]">
+          {result.provenance?.execution_mode === "demo_fixture"
+            ? "Demonstration fixture — these saved results do not analyze your image."
+            : result.provenance?.execution_mode === "synthetic_benchmark"
+            ? "Synthetic benchmark — OpenCV ran on a generated test image. This is not a physical sample validation."
+            : result.provenance?.execution_mode === "live_opencv"
+            ? "OpenCV analysis of your upload — physical NTU and millimeter calibration has not been validated."
+            : "Legacy result — execution provenance is unavailable. Treat physical measurements as unverified."}
+        </div>
         {/* HERO DECISION BANNER */}
         <motion.div
           initial={{ opacity: 0, y: -10 }}
@@ -986,7 +997,7 @@ export default function JobPage() {
 
                     <div className="grid grid-cols-2 gap-2.5 flex-1 min-w-[200px]">
                       <div className="p-3 rounded-xl bg-[#070d18]/80 border border-[#163256]">
-                        <span className="text-[10px] font-mono uppercase text-[#8aa0c0] block">Estimated NTU</span>
+                        <span className="text-[10px] font-mono uppercase text-[#8aa0c0] block">Illustrative NTU (uncalibrated)</span>
                         <span className="text-xl font-extrabold font-mono text-white block mt-0.5">
                           {decision === "NO_PATTERN_DETECTED" ? "N/A" : resolvedNtu.toFixed(1)}{" "}
                           {decision !== "NO_PATTERN_DETECTED" && <span className="text-xs font-normal text-[#8aa0c0]">NTU</span>}
@@ -996,12 +1007,12 @@ export default function JobPage() {
                             ? "Target Grid Missing"
                             : secondVis !== undefined
                             ? "Pass 2 (< 1.0 Pristine)"
-                            : "WHO Standard < 5.0"}
+                            : "Physical calibration required"}
                         </span>
                       </div>
 
                       <div className="p-3 rounded-xl bg-[#070d18]/80 border border-[#163256]">
-                        <span className="text-[10px] font-mono uppercase text-[#8aa0c0] block">WHO Quality Tier</span>
+                        <span className="text-[10px] font-mono uppercase text-[#8aa0c0] block">Illustrative tier (unvalidated)</span>
                         <span
                           className={`text-sm font-extrabold font-mono block mt-1 ${
                             decision === "NO_PATTERN_DETECTED"
@@ -1313,24 +1324,24 @@ export default function JobPage() {
             {result.measurements && (
               <div className="glass-studio rounded-2xl p-4 space-y-2">
                 <span className="text-[11px] font-bold uppercase tracking-wide text-[#8aa0c0] block">
-                  AWS Graviton3 ARM64 Edge Latency Telemetry (ms)
+                  Processing latency (ms)
                 </span>
                 <div className="grid grid-cols-5 gap-1.5 text-center font-mono text-[11px]">
                   <div className="p-2 rounded-lg bg-[#070d18] border border-[#163256]">
                     <span className="text-[#8aa0c0] text-[9px] block">Decode</span>
-                    <span className="text-white font-semibold">{result.measurements.decode_ms ?? "0.8"} ms</span>
+                    <span className="text-white font-semibold">{result.measurements.decode_ms ?? "—"} ms</span>
                   </div>
                   <div className="p-2 rounded-lg bg-[#070d18] border border-[#163256]">
                     <span className="text-[#8aa0c0] text-[9px] block">Pass 1</span>
-                    <span className="text-white font-semibold">{result.measurements.first_pass_ms ?? "4.2"} ms</span>
+                    <span className="text-white font-semibold">{result.measurements.first_pass_ms ?? "—"} ms</span>
                   </div>
                   <div className="p-2 rounded-lg bg-[#070d18] border border-[#163256]">
                     <span className="text-[#8aa0c0] text-[9px] block">Agent MCP</span>
-                    <span className="text-white font-semibold">{result.measurements.agent_ms ?? "0.3"} ms</span>
+                    <span className="text-white font-semibold">{result.measurements.agent_ms ?? "—"} ms</span>
                   </div>
                   <div className="p-2 rounded-lg bg-[#070d18] border border-[#163256]">
                     <span className="text-[#8aa0c0] text-[9px] block">Pass 2</span>
-                    <span className="text-white font-semibold">{result.measurements.second_pass_ms ?? "3.9"} ms</span>
+                    <span className="text-white font-semibold">{result.measurements.second_pass_ms ?? "—"} ms</span>
                   </div>
                   <div className="p-2 rounded-lg bg-[#070d18] border border-[#38bdf8]/40">
                     <span className="text-[#38bdf8] text-[9px] block">Total</span>
