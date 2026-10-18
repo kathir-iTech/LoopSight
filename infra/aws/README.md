@@ -1,0 +1,110 @@
+# AWS deployment and verification
+
+**Current direction: the owner stopped the OpenCV entry and cancelled AWS setup.**
+These files remain as implementation history. Do not resume the connection or
+deployment workflow below; see [project direction](../../reports/PROJECT_DIRECTION.md).
+
+**Deployment is paused under the owner's hard ₹0 spending constraint.**
+The tracked `ZERO_SPEND_ONLY` gate makes the deployment helper exit before
+provider commands. The commands below describe the prepared architecture;
+they are not currently authorized to create chargeable resources. Do not remove
+the gate or enter payment details without resolving the zero-charge access
+dependency in [the spending plan](../../reports/ZERO_SPEND_PLAN.md).
+
+This configuration is prepared for account review and execution. It is not
+evidence that an AWS deployment exists. Run commands from the repository root.
+
+The architecture uses **Lambda ARM64 + private S3 shared storage** for both jobs
+and capture sessions. This avoids DynamoDB's item-size limit for overlay-rich
+results and reduces the number of services required for the demonstration.
+The optional legacy DynamoDB job adapter remains supported, but the deployment
+template uses S3. No COOL integration is claimed.
+
+## Prerequisites
+
+- AWS CLI v2 authenticated to the intended account and region, with permission
+  to deploy the reviewed CloudFormation resources, access ECR, pass/create the
+  scoped role and resolve the generated Secrets Manager token.
+- Docker buildx with ARM64 execution support, a native ARM64 builder, or the
+  exact-revision image archive produced by the native ARM64 GitHub CI job.
+  This development machine's builder supports amd64 only. Native GitHub CI now
+  builds/runs the actual Lambda image; that is separate from AWS account deployment.
+- Review account pricing, existing workloads and service quotas. Resources can
+  incur charges. Reserved concurrency 2 bounds this function, but also requires
+  account concurrency quota. The template adds private encrypted S3, one secret,
+  seven-day logs and one CloudWatch alarm. No free-tier guarantee is made.
+- A clean Git checkout and a stack name of at most 50 characters.
+
+## Deploy
+
+```bash
+AWS_REGION=us-east-1 STACK_NAME=loopsight ./scripts/deploy_lambda.sh
+```
+
+The script checks identity, creates/reuses an ECR repository, builds an immutable
+revision-tagged ARM64 image, resolves its digest, validates and deploys the
+CloudFormation template, waits for completion and reports nonsecret outputs.
+It fails on errors and does not overwrite an existing function's configuration
+outside the stack. Use the same stack name for updates; choose a new name if
+an earlier manually created Lambda has the same function name.
+
+On an amd64 development machine, retrieve the successful workflow's
+`loopsight-arm64-lambda-image` artifact, verify its artifact digest against GitHub
+metadata, and use the extracted archive:
+
+```bash
+CI_IMAGE_ARCHIVE=/path/to/loopsight-arm64-lambda.tar.gz AWS_REGION=us-east-1 STACK_NAME=loopsight ./scripts/deploy_lambda.sh
+```
+
+The script checks the image architecture and exact Git revision label before
+cloud writes, then tags/pushes the verified image without executing ARM code
+locally. CI artifacts expire after one day; rerun the native job if unavailable.
+No privileged emulation setup is required on the development machine.
+
+The generated backend token is stored in Secrets Manager and injected into the
+Lambda environment using a dynamic reference. A permitted operator must set
+the **same value** as Vercel's server-only `INFERENCE_API_TOKEN`, and set
+`INFERENCE_API_URL` to `InferenceUrl`. Use secure project settings; never place
+the token in a `NEXT_PUBLIC_` variable, Git, shell tracing or chat. The script
+does not print token values. Redeploy Vercel after setting its environment.
+
+Public `/health` and `/version` expose no secrets. Inspection, evidence and
+readiness endpoints require the backend token when configured. The public
+website proxies the token on the server. Public website traffic can still spend
+compute; application concurrency bounds and Lambda reserved concurrency do not
+replace account budgets or a production traffic/rate policy.
+
+## Verify actual deployment
+
+Run the deployed smoke helper through the website, using its HTTPS URL:
+
+```bash
+.venv/bin/python services/inference/scripts/smoke_deployed.py --web-base https://YOUR-PREVIEW.vercel.app --output /tmp/deployed-smoke.json
+```
+
+The native container check already passed on an ARM64 GitHub runner through
+the Lambda runtime emulator, including packaged OpenCV processing and stored job
+retrieval. See [verification metadata](../../reports/evidence/2026-10-18-native-arm64-lambda.json).
+It does not verify an AWS account deployment or S3 cloud execution.
+
+The deployed helper requires an actual ARM64 backend, the expected revision and shared
+S3 adapters; posts generated images through the web proxy; verifies recapture,
+retained pixels, evidence manifest hashes and unknown/invalid request errors.
+Use `--expected-revision` for the exact deployed commit. It does not establish
+physical accuracy, external user impact or a cross-instance cold start by itself.
+Different instance IDs across the retained capture flow are recorded if observed.
+Prove separate-instance routing explicitly before claiming it as deployed evidence.
+
+## Retention, links and cleanup
+
+Capture access defaults to 30 minutes; job access defaults to 24 hours. The app
+checks expiry before serving S3 objects. Bucket lifecycle removes stored objects
+asynchronously after a day; this is not an exact-time deletion guarantee.
+The bucket is private, blocks public ACLs/policies, requires TLS and encrypts
+objects. Job links act as unguessable bearer links: recipients can view evidence
+until expiry and keep downloaded copies afterward. Do not upload sensitive data.
+
+Deleting the stack retains the evidence bucket to avoid accidental data loss;
+the bucket can continue to incur storage charges until an authorized operator
+empties/deletes it. ECR images are outside this stack and also require explicit
+cleanup. Follow the account's approved cleanup/retention policy.

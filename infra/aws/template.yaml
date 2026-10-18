@@ -1,0 +1,163 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: LoopSight ARM64 inference with private shared evidence, bounded concurrency and a backend token.
+Parameters:
+  ImageUri:
+    Type: String
+    Description: Immutable ARM64 ECR image URI including sha256 digest.
+    AllowedPattern: '^\d{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9/_-]+@sha256:[a-f0-9]{64}$'
+  BuildRevision:
+    Type: String
+    AllowedPattern: '^[a-f0-9]{40}$'
+  AllowedOrigin:
+    Type: String
+    Default: https://loopsight.vercel.app
+    AllowedPattern: '^https://[A-Za-z0-9.-]+$'
+Resources:
+  EvidenceBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteExpiredEvidence
+            Status: Enabled
+            Prefix: loopsight/v1/
+            ExpirationInDays: 1
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref EvidenceBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt EvidenceBucket.Arn
+              - !Sub '${EvidenceBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+  BackendToken:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Server-only token shared with the Vercel inference proxy.
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+  InferenceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LoopSightEvidenceAndLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject']
+                Resource: !Sub '${EvidenceBucket.Arn}/loopsight/v1/*'
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt EvidenceBucket.Arn
+              - Effect: Allow
+                Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-inference:*'
+  InferenceLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-inference'
+      RetentionInDays: 7
+  InferenceFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: InferenceLogs
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-inference'
+      PackageType: Image
+      Code:
+        ImageUri: !Ref ImageUri
+      Architectures: [arm64]
+      MemorySize: 1536
+      Timeout: 30
+      ReservedConcurrentExecutions: 2
+      Role: !GetAtt InferenceRole.Arn
+      Environment:
+        Variables:
+          LOOPSIGHT_EVIDENCE_BUCKET: !Ref EvidenceBucket
+          LOOPSIGHT_BUILD_REVISION: !Ref BuildRevision
+          LOOPSIGHT_API_TOKEN: !Sub '{{resolve:secretsmanager:${BackendToken}:SecretString}}'
+          LOOPSIGHT_CAPTURE_TTL_SECONDS: '1800'
+          LOOPSIGHT_JOB_TTL_SECONDS: '86400'
+          LOOPSIGHT_MAX_REQUEST_BYTES: '4000000'
+          LOOPSIGHT_MAX_CONCURRENT_INSPECTIONS: '2'
+          CORS_ORIGINS: !Ref AllowedOrigin
+          GEMINI_API_KEY: ''
+          DYNAMO_TABLE_NAME: ''
+          OPENBLAS_NUM_THREADS: '1'
+          OMP_NUM_THREADS: '1'
+  FunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt InferenceFunction.Arn
+      AuthType: NONE
+      InvokeMode: BUFFERED
+  UrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunctionUrl
+      FunctionName: !Ref InferenceFunction
+      Principal: '*'
+      FunctionUrlAuthType: NONE
+  InvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref InferenceFunction
+      Principal: '*'
+      InvokedViaFunctionUrl: true
+  ErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Inference errors; connect an account-approved notification destination if needed.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref InferenceFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+Outputs:
+  InferenceUrl:
+    Value: !GetAtt FunctionUrl.FunctionUrl
+  EvidenceBucketName:
+    Value: !Ref EvidenceBucket
+  BackendTokenSecretArn:
+    Value: !Ref BackendToken
+  FunctionName:
+    Value: !Ref InferenceFunction

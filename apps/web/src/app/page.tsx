@@ -32,6 +32,8 @@ import {
 } from "lucide-react";
 import { loadHistory, clearHistory, type HistoryEntry } from "@/lib/history";
 import toast from "react-hot-toast";
+import { InferenceStatus } from "@/components/inference-status";
+import Link from "next/link";
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -55,7 +57,7 @@ interface BenchmarkCase {
   desc: string;
   preview: string;
   category: "water" | "crack";
-  expectedVerdict: "PASS" | "FAIL";
+  expectedVerdict: "PASS" | "FAIL" | "REVIEW";
 }
 
 const BENCHMARK_CASES: BenchmarkCase[] = [
@@ -63,11 +65,11 @@ const BENCHMARK_CASES: BenchmarkCase[] = [
     id: "water_glare_confounded",
     title: "Clear Water + Specular Glare",
     profile: "water_turbidity_v1",
-    badge: "inpaint_specular_glare → PASS",
-    desc: "Curved glass reflection washes out Pass 1. Bounded agent dispatches Telea glare inpainting + dynamic contrast recovery.",
+    badge: "Glare diagnosis → REVIEW",
+    desc: "Generated glare lowers the image score. Same-image enhancement cannot clear the sample; a new capture is required.",
     preview: "/samples/water_glare_confounded.png",
     category: "water",
-    expectedVerdict: "PASS",
+    expectedVerdict: "REVIEW",
   },
   {
     id: "water_stratified_sediment",
@@ -84,7 +86,7 @@ const BENCHMARK_CASES: BenchmarkCase[] = [
     title: "Ambient → Backlight Pair",
     profile: "water_turbidity_v1",
     badge: "track_across_frames → PASS",
-    desc: "Dim ambient capture scores UNCERTAIN (0.31). Agent fuses backlit second frame (0.79) with sub-pixel registration.",
+    desc: "Dim ambient capture scores UNCERTAIN (0.31). A second generated image is aligned and measured; first-pass evidence is retained.",
     preview: "/samples/water_dual_lighting.png",
     category: "water",
     expectedVerdict: "PASS",
@@ -104,7 +106,7 @@ const BENCHMARK_CASES: BenchmarkCase[] = [
     title: "Concrete + Surface Shadow",
     profile: "structural_crack_metrology_v1",
     badge: "skeletonize_crack_metrology → PASS",
-    desc: "Surface shadow artifact mimics fracture on Pass 1. Agent runs homomorphic illumination normalization (0.00mm).",
+    desc: "Surface shadow artifact mimics fracture on Pass 1. Agent runs homomorphic illumination normalization.",
     preview: "/samples/crack_shadow_confounded.png",
     category: "crack",
     expectedVerdict: "PASS",
@@ -113,8 +115,8 @@ const BENCHMARK_CASES: BenchmarkCase[] = [
     id: "crack_structural_fail",
     title: "Structural Concrete Fracture",
     profile: "structural_crack_metrology_v1",
-    badge: "Euclidean Metrology → FAIL (0.719mm)",
-    desc: "Morphological black-hat + Euclidean distance transform (cv2.distanceTransform) measures 0.719mm fracture width.",
+    badge: "Image-space ridge screening → FAIL",
+    desc: "Morphological black-hat + Euclidean distance transform (cv2.distanceTransform) measures a crack-like ridge in image pixels.",
     preview: "/samples/crack_structural_fail.png",
     category: "crack",
     expectedVerdict: "FAIL",
@@ -320,8 +322,8 @@ export default function HomePage() {
 
   const handleFileSelect = useCallback(
     (file: File) => {
-      if (file.size > 10 * 1024 * 1024) {
-        setError("Image file exceeds 10 MB limit. Please select a smaller photo.");
+      if (file.size > 3_500_000) {
+        setError("Image exceeds 3.5 MB. Please select a smaller PNG, JPEG or WebP photo.");
         return;
       }
       if (cameraStream) {
@@ -472,7 +474,10 @@ export default function HomePage() {
       form.append("has_pattern", hasPattern ? "true" : "false");
 
       const res = await fetch("/api/inspect", { method: "POST", body: form });
-      if (!res.ok) throw new Error("Upload failed");
+      if (!res.ok) {
+        const failure = await res.json().catch(() => null);
+        throw new Error(typeof failure?.detail === "string" ? failure.detail : "Image analysis failed. Please retry.");
+      }
       const data = await res.json();
       const { job_id, result } = data;
 
@@ -493,8 +498,8 @@ export default function HomePage() {
       }
 
       router.push(`/job/${job_id}`);
-    } catch {
-      setError("Failed to run active perception inspection. Please try again.");
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Image analysis failed. Please retry.");
       toast.error("Inspection failed. Please retry.");
       setUploading(false);
     }
@@ -558,7 +563,7 @@ export default function HomePage() {
       <div className="studio-grid absolute inset-0 opacity-40 pointer-events-none" />
 
       {/* Top Navigation Bar */}
-      <header className="sticky top-0 z-40 backdrop-blur-xl bg-[#070d18]/85 border-b border-[#163256]/80 px-4 md:px-8 py-3.5 flex items-center justify-between">
+      <header className="sticky top-0 z-40 backdrop-blur-xl bg-[#070d18]/85 border-b border-[#163256]/80 px-4 md:px-8 py-3.5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#0ea5e9] to-[#38bdf8] flex items-center justify-center shadow-lg shadow-[#38bdf8]/25">
             <Droplets className="h-5 w-5 text-white" />
@@ -576,12 +581,12 @@ export default function HomePage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5">
-          <div className="hidden lg:flex items-center gap-2 px-3 py-1 rounded-full bg-[#0b192e] border border-[#163256] text-xs font-mono text-[#8aa0c0]">
-            <span className="w-2 h-2 rounded-full bg-[#22c55e] animate-pulse" />
-            OpenCV 5.0-dev · 8 MCP Tools · Beer-Lambert NTU
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex w-full sm:w-auto items-center justify-between gap-3 px-3 py-2 rounded-lg bg-[#0b192e] border border-[#163256] text-xs text-[#8aa0c0]">
+            <InferenceStatus />
+            <Link href="/evaluation" className="whitespace-nowrap text-[#38bdf8] hover:underline">Evaluation evidence</Link>
           </div>
-          <span className="px-2.5 py-1 rounded-full bg-[#38bdf8]/10 border border-[#38bdf8]/20 text-xs font-medium text-[#7dd3fc]">
+          <span className="hidden lg:inline-flex px-2.5 py-1 rounded-full bg-[#38bdf8]/10 border border-[#38bdf8]/20 text-xs font-medium text-[#7dd3fc]">
             OpenCV AI 2026
           </span>
         </div>
@@ -595,14 +600,14 @@ export default function HomePage() {
             <div className="w-6 h-6 rounded-lg bg-[#38bdf8]/15 border border-[#38bdf8]/30 flex items-center justify-center flex-shrink-0">
               <ShieldCheck className="h-3.5 w-3.5 text-[#38bdf8]" />
             </div>
-            <p className="text-[#8aa0c0] truncate">
-              <strong className="text-white font-medium">Drinking Water Screening & Metrology:</strong> Calibrated against{" "}
-              <span className="text-[#38bdf8]">WHO Guidelines & Indian IS 10500:2012</span>. Flags visibly cloudy water (Beer-Lambert NTU) & concrete cracks (mm).
+            <p className="text-[#8aa0c0] leading-relaxed">
+              <strong className="text-white font-medium">Relative Visual Screening:</strong> Using{" "}
+              <span className="text-[#38bdf8]">Image-space clarity and line-feature screening</span>. Reports pattern visibility and crack-like features in pixels. It does not certify water or structural safety.
             </p>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0 font-mono text-[11px]">
             <span className="text-[#38bdf8] bg-[#38bdf8]/10 px-2 py-0.5 rounded border border-[#38bdf8]/20">
-              Δ Benefit: +0.7500
+              Image-space evidence
             </span>
             <span className="text-[#8aa0c0] hidden md:inline">Uncertainty-Bounded DAG</span>
           </div>
@@ -753,12 +758,13 @@ export default function HomePage() {
                           Drop inspection photo or choose below
                         </h3>
                         <p className="text-xs text-[#8aa0c0] leading-relaxed">
-                          Supports high-res PNG, JPEG, WebP. Position sample over printed checkerboard pattern for optical nephelometry.
+                          PNG, JPEG or WebP up to 3.5 MB. Keep the checkerboard visible behind the sample.
                         </p>
+                        <Link href="/capture-guide" className="text-xs text-[#38bdf8] hover:underline">Printable target and capture guide →</Link>
                       </div>
                       <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
                         <input
-                          ref={fileInputRef}
+                          ref={fileInputRef} data-testid="primary-image-input"
                           type="file"
                           accept="image/*"
                           className="hidden"
@@ -823,7 +829,7 @@ export default function HomePage() {
                 ) : (
                   <div className="text-[#8aa0c0] font-mono text-[11px] flex items-center gap-2">
                     <Sliders className="h-3.5 w-3.5 text-[#38bdf8]" />
-                    Ready for optical pattern analysis · Beer-Lambert calibration active
+                    Ready for checkerboard analysis · Relative image scores
                   </div>
                 )}
 
@@ -946,10 +952,10 @@ export default function HomePage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-white">Water Nephelometry</span>
-                      <span className="text-[10px] font-mono text-[#38bdf8]">IS 10500:2012</span>
+                      <span className="text-[10px] font-mono text-[#38bdf8]">Relative image score</span>
                     </div>
                     <p className="text-[11px] text-[#8aa0c0] mt-0.5 leading-snug">
-                      Beer-Lambert formula NTU = 3.5(1/v - 1)^1.15 with Telea glare inpainting and vertical stratification.
+                      Dimensionless pattern visibility with glare, focus and vertical variation checks. Physical turbidity calibration is unavailable.
                     </p>
                   </div>
                 </button>
@@ -974,11 +980,11 @@ export default function HomePage() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-white">Crack Metrology (mm)</span>
+                      <span className="text-xs font-bold text-white">Crack-like features (px)</span>
                       <span className="text-[10px] font-mono text-[#38bdf8]">Distance Transform</span>
                     </div>
                     <p className="text-[11px] text-[#8aa0c0] mt-0.5 leading-snug">
-                      Euclidean distance transform + homomorphic illumination normalization to measure fracture width in mm.
+                      Euclidean distance transform + homomorphic illumination normalization to measure line-feature width in pixels, without assuming a physical scale.
                     </p>
                   </div>
                 </button>
@@ -1160,11 +1166,11 @@ export default function HomePage() {
               <div className="flex items-center gap-2">
                 <Sparkles className="h-4 w-4 text-[#38bdf8]" />
                 <h3 className="text-sm font-bold text-white uppercase tracking-wide">
-                  1-Click Live OpenCV 5 Benchmark Suite (No Printer Needed)
+                  Synthetic OpenCV 5 Benchmark Suite
                 </h3>
               </div>
               <p className="text-xs text-[#8aa0c0] mt-0.5">
-                Inspect physical ground-truth test cases through the real active perception engine immediately.
+                Run generated scenarios through OpenCV. These fixtures demonstrate the pipeline; they do not establish real-world accuracy.
               </p>
             </div>
 
@@ -1271,7 +1277,7 @@ export default function HomePage() {
               </div>
               <h4 className="text-xs font-bold text-white">2 · Bounded Agent Tool Dispatch</h4>
               <p className="text-xs text-[#8aa0c0] leading-relaxed">
-                When glare, settling mud, or low light confounds the first look, the agent executes whitelisted tools: Telea inpainting, deskew, stratification, or dual-lighting fusion.
+                When glare, settling mud, or low light confounds the first look, the agent executes whitelisted tools: Telea inpainting, deskew, stratification, or validated changed-lighting recapture.
               </p>
             </div>
 
@@ -1281,7 +1287,7 @@ export default function HomePage() {
               </div>
               <h4 className="text-xs font-bold text-white">3 · Deterministic Policy Verdict</h4>
               <p className="text-xs text-[#8aa0c0] leading-relaxed">
-                The agent never hallucinates a verdict. Fixed math in policy.py enforces WHO standards: Pass (&ge;0.55), Fail (&le;0.20), or Review.
+                The agent selects tools; an explicit image-score policy returns Pass, Fail or Review. These screening thresholds are not certified physical or health standards.
               </p>
             </div>
           </div>
@@ -1294,7 +1300,7 @@ export default function HomePage() {
           LoopSight v2 · Built for the <strong className="text-white">OpenCV AI Competition 2026</strong> (powered by AWS).
         </p>
         <p className="text-[11px] text-[#5a7aa0]">
-          Drinking water safety screening: flags visible turbidity. Real water potability requires certified chemical testing.
+          Visual water-clarity screening: flags image patterns. Water safety requires appropriate chemical and microbiological testing.
         </p>
       </footer>
 

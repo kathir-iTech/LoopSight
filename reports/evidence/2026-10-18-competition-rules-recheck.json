@@ -1,0 +1,43 @@
+{
+  "checked_at_india": "2026-10-18T15:14:14.591644+05:30",
+  "sources": {
+    "overview": {
+      "url": "https://opencv26.devpost.com/",
+      "http_status": 200,
+      "html_sha256": "e85dabe6d82021335cc96479bd46ca84d47a4b7323554d86429d27de32eac2b9"
+    },
+    "rules": {
+      "url": "https://opencv26.devpost.com/rules",
+      "http_status": 200,
+      "html_sha256": "9080cef9eb35728b08733abcbbeff757355d984b67f535d1fee434ac4d8843d3"
+    },
+    "updates": {
+      "url": "https://opencv26.devpost.com/updates",
+      "http_status": 200,
+      "html_sha256": "3d3654e63c6c2f72db0594099e8a0f79627fed72eda43144c9cdcd69b6ba6a53"
+    },
+    "grant-update": {
+      "url": "https://opencv26.devpost.com/updates/46417-aws-compute-grant-notifications-have-been-sent",
+      "http_status": 200,
+      "html_sha256": "c3028061a532417d5733fa20a88ed48884a9b4930c1e557489d5a03b3255f6cf"
+    },
+    "proposal": {
+      "url": "https://www.jotform.com/form/262145877145059",
+      "http_status": 200,
+      "html_sha256": "dde8229807bfd3e2c6fc85d6085fffdba0fbbd2eb99d5b1818e705fe31545510"
+    },
+    "opencv": {
+      "url": "https://opencv.org/opencv-ai-competition-2026/",
+      "http_status": 200,
+      "html_sha256": "d21d848501aedbcc47d940dc42ae9b3be0bc23f38e58ff9a92fb0a1622debf8a"
+    }
+  },
+  "grant_form_exact_notice": "Submissions for AWS Grants are closed. All teams, even those who were not selected or did not submit a proposal, are still eligible for all prizes!",
+  "conclusion": "Not submitting an AWS grant proposal does not bar eligibility for any prize. Other entry and individual eligibility requirements still apply.",
+  "prior_proposal_prerequisite_advice": "withdrawn",
+  "october_7_to_14_scope": "Grant-recipient midpoint check-ins on Devpost; exact grant-form closure date not established.",
+  "earlier_platform_deadline_india": "2026-10-27T12:15:00+05:30",
+  "narrative_deadline_india": "2026-10-27T12:29:00+05:30",
+  "private_account_accessed": false,
+  "forms_or_messages_submitted": false
+}

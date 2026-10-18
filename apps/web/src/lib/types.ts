@@ -11,13 +11,11 @@ export interface RegionEvidence {
   skew_deg?: number;
   stratification_delta?: number;
   // structural crack metrology fields
-  crack_width_mm?: number;
+  crack_width_px?: number;
   crack_length_px?: number;
   crack_severity_score?: number;
   detection_method?: string;
   // physical nephelometry & standards
-  estimated_ntu?: number;
-  who_tier?: "PRISTINE" | "ACCEPTABLE" | "ELEVATED_TURBIDITY" | string;
 }
 
 export interface Region {
@@ -29,6 +27,7 @@ export interface Region {
 }
 
 export interface AgentCall {
+  selector?: "gemini" | "deterministic_policy" | "deterministic_fallback";
   tool: string;
   reason_code: string;
   tool_chain?: string[];
@@ -41,15 +40,14 @@ export interface SecondPassRegion {
   pattern_found?: boolean | number;
   glare_ratio?: number;
   stratification_delta?: number;
-  crack_width_mm?: number;
+  crack_width_px?: number;
   crack_length_px?: number;
   crack_severity_score?: number;
-  estimated_ntu?: number;
-  who_tier?: "PRISTINE" | "ACCEPTABLE" | "ELEVATED_TURBIDITY" | string;
   [key: string]: number | boolean | string | undefined;
 }
 
 export interface SecondPass {
+  evidence_source?: "new_capture" | "same_image_processing";
   regions: SecondPassRegion[];
   notes?: string;
 }
@@ -70,6 +68,40 @@ export interface Measurements {
 }
 
 export interface InspectionResult {
+  capture_session?: {
+    state: "awaiting_capture" | "needs_review" | "complete";
+    can_recapture: boolean;
+    instructions: string[];
+    parent_job_id: string | null;
+    expires_at?: string;
+    evidence_available?: boolean;
+  };
+  acquisition?: {
+    observations_received: number;
+    observations_used: number;
+    new_capture_used: boolean;
+    parent_job_id: string | null;
+    pair_validation?: {
+      accepted: boolean;
+      correlation: number;
+      overlap: number;
+      scope: string;
+      limitations: string;
+    } | null;
+  };
+  measurement_contract?: {
+    version: string;
+    physical_units_available: false;
+    water_unit: string;
+    crack_width_unit: string;
+    limitations: string[];
+  };
+  provenance?: {
+    execution_mode: "live_opencv" | "synthetic_benchmark" | "demo_fixture";
+    opencv_version?: string;
+    runtime_instance_id?: string;
+    measurement_basis?: string;
+  };
   status: "CONFIDENT_PASS" | "CONFIDENT_FAIL" | "UNCERTAIN";
   inspection_profile?: string;
   regions: Region[];

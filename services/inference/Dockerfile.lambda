@@ -1,8 +1,5 @@
-# LoopSight — Lambda container for ARM64 (always-free tier)
-# Base: AWS Lambda Python 3.12 on arm64 — stays inside the always-free tier at demo volumes.
-# This image is the Lambda packaging of the SAME FastAPI app that runs locally via `uvicorn main:app`.
-# Not pursuing Best Use of COOL (COOL requires paid Marketplace AMI + m8g.4xlarge — not free).
-FROM public.ecr.aws/lambda/python:3.12-arm64
+# LoopSight Lambda packaging. Deployment and account costs require verification.
+FROM public.ecr.aws/lambda/python:3.13-arm64
 
 # Lambda's work dir — all code must be in ${LAMBDA_TASK_ROOT} (/var/task)
 WORKDIR ${LAMBDA_TASK_ROOT}
@@ -19,6 +16,13 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY services/inference/cv ${LAMBDA_TASK_ROOT}/cv
 COPY services/inference/agent ${LAMBDA_TASK_ROOT}/agent
 COPY services/inference/storage.py ${LAMBDA_TASK_ROOT}/storage.py
+COPY services/inference/demo_golden.py ${LAMBDA_TASK_ROOT}/demo_golden.py
+COPY services/inference/evidence.py ${LAMBDA_TASK_ROOT}/evidence.py
+COPY services/inference/capture_sessions.py ${LAMBDA_TASK_ROOT}/capture_sessions.py
+COPY services/inference/cloud_storage.py ${LAMBDA_TASK_ROOT}/cloud_storage.py
+COPY services/inference/request_limits.py ${LAMBDA_TASK_ROOT}/request_limits.py
+COPY services/inference/evidence_bundle.py ${LAMBDA_TASK_ROOT}/evidence_bundle.py
+COPY services/inference/sample_frames.py ${LAMBDA_TASK_ROOT}/sample_frames.py
 COPY services/inference/main.py ${LAMBDA_TASK_ROOT}/main.py
 
 # The handler that Mangum exposes: main.handler wraps the FastAPI app.

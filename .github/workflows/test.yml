@@ -7,6 +7,64 @@ on:
     branches: [main]
 
 jobs:
+  arm64-lambda-runtime:
+    name: Native ARM64 Lambda container
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build actual ARM64 Lambda image
+        run: |
+          if ! docker build --platform linux/arm64 --label org.opencontainers.image.revision=${{ github.event.pull_request.head.sha || github.sha }} -f services/inference/Dockerfile.lambda -t loopsight-arm64:check . > /tmp/loopsight-arm-build.log 2>&1; then
+            tail -n 40 /tmp/loopsight-arm-build.log
+            python3 - <<'PY'
+          from pathlib import Path
+          message = Path('/tmp/loopsight-arm-build.log').read_text()[-6000:]
+          message = message.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+          print('::error title=ARM64 Lambda build::' + message)
+          PY
+            exit 1
+          fi
+      - name: Start Lambda runtime emulator
+        run: >-
+          docker run -d --name loopsight-arm64 -p 9000:8080
+          -e LOOPSIGHT_BUILD_REVISION=${{ github.sha }}
+          -e GEMINI_API_KEY= -e DYNAMO_TABLE_NAME= -e LOOPSIGHT_EVIDENCE_BUCKET=
+          -e LOOPSIGHT_API_TOKEN= -e DEMO_MODE=
+          -e OPENBLAS_NUM_THREADS=1 -e OMP_NUM_THREADS=1 loopsight-arm64:check
+      - name: Invoke packaged handler on native ARM64
+        run: python3 scripts/smoke_lambda_image.py --revision '${{ github.sha }}' --output /tmp/native-arm64-lambda.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-arm64-lambda-verification
+          path: /tmp/native-arm64-lambda.json
+      - name: Preserve the verified image for deployment from an amd64 machine
+        run: docker save loopsight-arm64:check | gzip > /tmp/loopsight-arm64-lambda.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: loopsight-arm64-lambda-image
+          path: /tmp/loopsight-arm64-lambda.tar.gz
+          retention-days: 1
+          compression-level: 0
+      - name: Container diagnostics
+        if: failure()
+        run: docker logs loopsight-arm64 || true
+      - name: Stop test container
+        if: always()
+        run: docker rm -f loopsight-arm64 || true
+
+  infrastructure-checks:
+    name: AWS configuration validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install cfn-lint==1.57.2
+      - run: cfn-lint infra/aws/template.yaml
+      - run: bash -n scripts/deploy_lambda.sh
+
   inference-tests:
     name: Inference tests (pytest)
     runs-on: ubuntu-latest
@@ -30,13 +88,19 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r ../../requirements.txt
-          pip install pytest
+          pip install pytest httpx
 
       - name: Run the inference test suite
-        # The suite self-imports via sys.path and never needs a real Gemini key
-        # or real photos; it runs the full harness (phases B/C/D/E) on synthetic
-        # fixtures. A real-dataset swap is a one-command change, not a rewrite.
+        # Synthetic regression coverage; this does not establish field accuracy.
         run: python -X utf8 -m pytest tests/ -q
+
+      - name: Evaluate declared synthetic capture pairs
+        run: python scripts/evaluate_captures.py ../../data/synthetic_capture_manifest.json --json "${RUNNER_TEMP}/paired-capture-regression.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-paired-capture-regression
+          path: ${{ runner.temp }}/paired-capture-regression.json
 
   web-build:
     name: Web build (Next.js)
@@ -56,5 +120,39 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Verify inspection and job API contracts
+        run: npm test
+
       - name: Build the Next.js app
         run: npm run build
+
+  browser-workflows:
+    name: Desktop and mobile inspection workflows
+    runs-on: ubuntu-latest
+    env:
+      LOOPSIGHT_TEST_PYTHON: python
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: pip install -r requirements.txt
+      - run: npm ci
+        working-directory: apps/web
+      - run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+      - run: npm run build
+        working-directory: apps/web
+      - run: npx playwright test
+        working-directory: apps/web
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-failure-traces
+          path: apps/web/test-results/

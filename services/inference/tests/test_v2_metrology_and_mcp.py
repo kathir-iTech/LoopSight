@@ -37,7 +37,7 @@ client = TestClient(app)
 ROI = (0, 0, 200, 200)
 
 
-def test_glare_confounder_triggers_uncertain_and_inpaint_resolves_pass():
+def test_glare_processing_cannot_clear_a_sample_without_a_new_capture():
     img = make_glare_confounded_water()
     fp = run_first_pass(img, None, [ROI], profile_name="water_turbidity_v1")
     assert fp.status == "UNCERTAIN", f"expected UNCERTAIN on glare confounder, got {fp.status}"
@@ -45,7 +45,9 @@ def test_glare_confounder_triggers_uncertain_and_inpaint_resolves_pass():
     tool_res = inpaint_specular_glare(img, ROI)
     final = decide(fp, tool_res.region, profile_name="water_turbidity_v1")
     print(f"  glare confounder: pass1_pv={fp.regions[0].pattern_visibility:.3f} -> inpaint_pv={tool_res.region.pattern_visibility:.3f} -> {final.decision}")
-    assert final.decision == "PASS"
+    assert final.decision == "REVIEW"
+    assert final.human_approval_required is True
+    assert "new photo" in final.reasoning[0]
 
 
 def test_vertical_stratification_triggers_uncertain_and_resolves_fail():
@@ -71,14 +73,14 @@ def test_structural_crack_metrology_profile_separates_intact_crack_and_confounde
     assert intact.status == "CONFIDENT_PASS", f"expected CONFIDENT_PASS for intact concrete, got {intact.status}"
 
     cracked = run_first_pass(make_structural_crack(thickness_px=6), None, [ROI], profile_name="structural_crack_metrology_v1")
-    assert cracked.status == "CONFIDENT_FAIL", f"expected CONFIDENT_FAIL for 0.6mm crack, got {cracked.status}"
-    assert cracked.regions[0].crack_width_mm >= 0.40
+    assert cracked.status == "CONFIDENT_FAIL", f"expected CONFIDENT_FAIL for 6px synthetic line, got {cracked.status}"
+    assert cracked.regions[0].crack_width_px >= 4.0
 
     confounded = run_first_pass(make_shadow_confounded_concrete(), None, [ROI], profile_name="structural_crack_metrology_v1")
     assert confounded.status == "UNCERTAIN"
     skel_res = skeletonize_crack_metrology(make_shadow_confounded_concrete(), ROI)
     final = decide(confounded, skel_res.region, profile_name="structural_crack_metrology_v1")
-    print(f"  crack metrology: intact={intact.status}, cracked_mm={cracked.regions[0].crack_width_mm:.3f}, confounded->{final.decision}")
+    print(f"  crack metrology: intact={intact.status}, cracked_px={cracked.regions[0].crack_width_px:.3f}, confounded->{final.decision}")
     assert final.decision == "PASS"
 
 
@@ -119,22 +121,15 @@ def test_sqlite_write_through_persistence():
         assert loaded["final_decision"]["decision"] == "PASS"
 
 
-def test_physical_ntu_estimation():
-    from cv.first_pass import estimate_physical_ntu
-    # 1. High visibility -> pristine domestic target (< 1.0 NTU)
-    ntu_clean, tier_clean = estimate_physical_ntu(0.85)
-    assert ntu_clean < 1.0, f"expected < 1.0 NTU for 0.85 visibility, got {ntu_clean}"
-    assert tier_clean == "PRISTINE"
-
-    # 2. Borderline threshold -> acceptable domestic supply limit (< 5.0 NTU)
-    ntu_border, tier_border = estimate_physical_ntu(0.55)
-    assert 1.0 <= ntu_border <= 5.5, f"expected ~4.8 NTU for 0.55 visibility, got {ntu_border}"
-    assert tier_border in ("ACCEPTABLE", "ELEVATED_TURBIDITY")
-
-    # 3. Turbid suspension -> elevated turbidity (> 5.0 NTU action threshold)
-    ntu_turbid, tier_turbid = estimate_physical_ntu(0.12)
-    assert ntu_turbid > 15.0, f"expected > 15.0 NTU for 0.12 visibility, got {ntu_turbid}"
-    assert tier_turbid == "ELEVATED_TURBIDITY"
+def test_water_evidence_is_dimensionless_without_physical_conversion():
+    from dataclasses import asdict
+    from cv.first_pass import measure_pattern_visibility
+    from sample_frames import make_clear_water, make_turbid_water, make_checkerboard
+    clear = measure_pattern_visibility(make_clear_water(), ROI)
+    turbid = measure_pattern_visibility(make_turbid_water(make_checkerboard()), ROI)
+    assert 0 <= turbid.pattern_visibility < clear.pattern_visibility <= 1
+    assert "estimated_ntu" not in asdict(clear)
+    assert "who_tier" not in asdict(clear)
 
 
 def test_multi_tool_chaining_execution():
@@ -150,7 +145,7 @@ def test_multi_tool_chaining_execution():
     assert "Step 2 (rectify_perspective_homography)" in res.notes
     assert res.region.pattern_found is True
     assert res.region.pattern_visibility > 0.20
-    assert res.region.estimated_ntu > 0
+    assert not hasattr(res.region, "estimated_ntu")
 
 
 def test_mcp_json_rpc_2_protocol():
@@ -192,13 +187,13 @@ def test_mcp_json_rpc_2_protocol():
 
 
 TESTS = [
-    test_glare_confounder_triggers_uncertain_and_inpaint_resolves_pass,
+    test_glare_processing_cannot_clear_a_sample_without_a_new_capture,
     test_vertical_stratification_triggers_uncertain_and_resolves_fail,
     test_rectify_perspective_homography_runs_cleanly,
     test_structural_crack_metrology_profile_separates_intact_crack_and_confounder,
     test_mcp_tools_and_benchmark_samples_endpoints,
     test_sqlite_write_through_persistence,
-    test_physical_ntu_estimation,
+    test_water_evidence_is_dimensionless_without_physical_conversion,
     test_multi_tool_chaining_execution,
     test_mcp_json_rpc_2_protocol,
 ]

@@ -1,0 +1,219 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const { createRequire } = require("node:module");
+const ts = require("typescript");
+
+// Exercise the real route handlers and NextResponse without a second web server.
+const source = path.resolve(__dirname, "../src");
+const modules = new Map();
+function loadTs(file) {
+  if (modules.has(file)) return modules.get(file).exports;
+  const compiled = ts.transpileModule(fs.readFileSync(file, "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const module = { exports: {} };
+  modules.set(file, module);
+  const nativeRequire = createRequire(file);
+  function resolve(name) {
+    if (name.startsWith("@/")) return loadTs(path.join(source, name.slice(2) + ".ts"));
+    return nativeRequire(name);
+  }
+  new Function("require", "module", "exports", compiled)(resolve, module, module.exports);
+  return module.exports;
+}
+const { POST } = loadTs(path.join(source, "app/api/inspect/route.ts"));
+const { GET } = loadTs(path.join(source, "app/api/jobs/[id]/route.ts"));
+const { GET: GET_CAPTURE } = loadTs(path.join(source, "app/api/jobs/[id]/captures/[index]/route.ts"));
+const { GET: GET_EVIDENCE } = loadTs(path.join(source, "app/api/jobs/[id]/evidence/route.ts"));
+const { GET: GET_READY } = loadTs(path.join(source, "app/api/readiness/route.ts"));
+const savedFetch = global.fetch;
+const variables = ["VERCEL", "INFERENCE_API_URL", "INFERENCE_API_TOKEN", "DEMO_MODE", "DEMO_CASE", "FAIL_CLOSED_PROD"];
+let savedEnv;
+test.beforeEach(() => {
+  savedEnv = Object.fromEntries(variables.map((key) => [key, process.env[key]]));
+  for (const key of variables) delete process.env[key];
+  process.env.VERCEL = "1";
+});
+test.afterEach(() => {
+  global.fetch = savedFetch;
+  for (const [key, value] of Object.entries(savedEnv)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
+function inspection(fields = {}) {
+  const form = new FormData();
+  form.set("image", new File(["not-an-image"], "upload.png"));
+  for (const [key, value] of Object.entries(fields)) form.set(key, value);
+  return POST(new Request("http://example.test/api/inspect", { method: "POST", body: form }));
+}
+function job(id) {
+  return GET(new Request("http://example.test/api/jobs/" + id), { params: Promise.resolve({ id }) });
+}
+
+test("missing Vercel backend never produces a fixture verdict", async () => {
+  const response = await inspection();
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).job_id, undefined);
+});
+test("an unreachable configured backend never produces a fixture verdict", async () => {
+  process.env.INFERENCE_API_URL = "http://backend.test";
+  global.fetch = async () => { throw new Error("offline"); };
+  assert.equal((await inspection()).status, 503);
+  assert.equal((await job("anything" )).status, 503);
+});
+test("backend validation errors retain their status and details", async () => {
+  process.env.INFERENCE_API_URL = "http://backend.test";
+  global.fetch = async () => Response.json({ detail: "could not decode image" }, { status: 400 });
+  const response = await inspection();
+  assert.equal(response.status, 400);
+  assert.match((await response.json()).detail, /decode/);
+});
+test("unknown backend jobs remain 404 rather than a successful mock", async () => {
+  process.env.INFERENCE_API_URL = "http://backend.test";
+  global.fetch = async () => Response.json({ detail: "Job not found" }, { status: 404 });
+  assert.equal((await job("missing")).status, 404);
+});
+test("a caller cannot enable demo mode through form fields", async () => {
+  process.env.INFERENCE_API_URL = "http://backend.test/";
+  global.fetch = async (url, options) => {
+    assert.equal(url, "http://backend.test/inspect");
+    assert.equal(options.body.get("demo_case"), null);
+    return Response.json({ job_id: "real-id" });
+  };
+  const response = await inspection({ demo_case: "confident_pass" });
+  assert.deepEqual(await response.json(), { job_id: "real-id" });
+});
+test("synthetic benchmarks are forwarded for actual OpenCV execution", async () => {
+  process.env.INFERENCE_API_URL = "http://backend.test";
+  global.fetch = async (url, options) => {
+    assert.equal(url, "http://backend.test/inspect/sample/water_turbid_fail");
+    assert.equal(options.body, undefined);
+    return Response.json({ job_id: "benchmark-id" });
+  };
+  assert.equal((await inspection({ sample_id: "water_turbid_fail" })).status, 200);
+});
+test("explicit fixtures carry provenance through creation and retrieval", async () => {
+  process.env.DEMO_MODE = "golden";
+  global.fetch = async () => { throw new Error("demo must not contact a backend"); };
+  const response = await inspection({ sample_id: "water_turbid_fail" });
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.result.provenance.execution_mode, "demo_fixture");
+  assert.equal(data.result.measurement_contract.physical_units_available, false);
+  for (const forbidden of ["estimated_ntu", "who_tier", "crack_width_mm"]) {
+    assert.equal(JSON.stringify(data.result).includes(forbidden), false);
+  }
+  assert.equal((await (await job(data.job_id)).json()).provenance.execution_mode, "demo_fixture");
+  assert.equal((await job("this-job-never-existed")).status, 404);
+  assert.equal((await job("missing-crack-job")).status, 404);
+  assert.equal((await job("__proto__")).status, 404);
+  assert.equal((await job("constructor")).status, 404);
+});
+test("timeouts return a gateway error without a verdict", async () => {
+  process.env.INFERENCE_API_URL = "http://backend.test";
+  global.fetch = async () => { throw new DOMException("timed out", "AbortError"); };
+  const response = await inspection();
+  assert.equal(response.status, 504);
+  assert.equal((await response.json()).job_id, undefined);
+});
+test("malformed forms return 400", async () => {
+  const response = await POST(new Request("http://example.test/api/inspect", { method: "POST", body: "oops" }));
+  assert.equal(response.status, 400);
+});
+
+test("follow-up uploads preserve the original job and actual new file", async () => {
+  process.env.INFERENCE_API_URL = "http://backend.test";
+  global.fetch = async (_url, options) => {
+    assert.equal(options.body.get("original_job_id"), "parent-id");
+    assert.equal(options.body.get("lighting2"), "backlight");
+    assert.equal(await options.body.get("image").text(), "not-an-image");
+    return Response.json({ job_id: "follow-up-id" });
+  };
+  const response = await inspection({ original_job_id: "parent-id", lighting2: "backlight" });
+  assert.equal((await response.json()).job_id, "follow-up-id");
+});
+
+test("retained capture proxy preserves PNG bytes and prevents shared caching", async () => {
+  process.env.INFERENCE_API_URL = "http://backend.test";
+  const bytes = Uint8Array.from([137, 80, 78, 71]);
+  global.fetch = async (url) => {
+    assert.equal(url, "http://backend.test/jobs/parent-id/captures/1");
+    return new Response(bytes, { headers: { "Content-Type": "image/png" } });
+  };
+  const response = await GET_CAPTURE(new Request("http://example.test"), {
+    params: Promise.resolve({ id: "parent-id", index: "1" }),
+  });
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), bytes);
+  assert.equal(response.headers.get("cache-control"), "private, no-store");
+  assert.equal(response.headers.get("content-type"), "image/png");
+});
+
+test("expired capture errors are preserved instead of replaced by sample images", async () => {
+  process.env.INFERENCE_API_URL = "http://backend.test";
+  global.fetch = async () => Response.json({ detail: "capture expired" }, { status: 410 });
+  const response = await GET_CAPTURE(new Request("http://example.test"), {
+    params: Promise.resolve({ id: "parent-id", index: "0" }),
+  });
+  assert.equal(response.status, 410);
+  assert.equal((await response.json()).detail, "capture expired");
+});
+
+test("backend token is attached server-side without entering the result", async () => {
+  process.env.INFERENCE_API_URL = "http://backend.test";
+  process.env.INFERENCE_API_TOKEN = "test-only-server-token";
+  global.fetch = async (_url, options) => {
+    assert.equal(options.headers.get("Authorization"), "Bearer test-only-server-token");
+    return Response.json({ job_id: "real-job" });
+  };
+  const response = await inspection();
+  assert.deepEqual(await response.json(), { job_id: "real-job" });
+});
+
+test("evidence proxy preserves archive bytes, filename and private caching", async () => {
+  process.env.INFERENCE_API_URL = "http://backend.test";
+  const bytes = Uint8Array.from([80, 75, 3, 4]);
+  global.fetch = async url => {
+    assert.equal(url, "http://backend.test/jobs/evidence-job/evidence");
+    return new Response(bytes, { headers: { "Content-Type": "application/zip" } });
+  };
+  const response = await GET_EVIDENCE(new Request("http://example.test"), { params: Promise.resolve({ id: "evidence-job" }) });
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), bytes);
+  assert.equal(response.headers.get("cache-control"), "private, no-store");
+  assert.match(response.headers.get("content-disposition"), /attachment/);
+});
+
+test("readiness requires actual version and successful storage reads", async () => {
+  process.env.INFERENCE_API_URL = "http://backend.test";
+  global.fetch = async url => url.endsWith("/version")
+    ? Response.json({ opencv_version: "5.0.0", storage: { shared_across_instances: true }, measurement_contract: { physical_units_available: false } })
+    : Response.json({ status: "ready" });
+  const response = await GET_READY();
+  const result = await response.json();
+  assert.equal(result.available, true);
+  assert.equal(result.shared_storage, true);
+  assert.equal(result.storage_write_verified, false);
+  global.fetch = async () => Response.json({ detail: "storage down" }, { status: 503 });
+  assert.equal((await GET_READY()).status, 503);
+});
+
+test("combined upload budget is checked before forwarding files", async () => {
+  let called = false;
+  global.fetch = async () => { called = true; return Response.json({}); };
+  const form = new FormData();
+  form.set("image", new File([new Uint8Array(2_000_000)], "one.png"));
+  form.set("reference_image", new File([new Uint8Array(2_000_000)], "two.png"));
+  const response = await POST(new Request("http://example.test/api/inspect", { method: "POST", body: form }));
+  assert.equal(response.status, 413);
+  assert.equal(called, false);
+});
+
+test("expired evidence does not become a successful archive", async () => {
+  process.env.INFERENCE_API_URL = "http://backend.test";
+  global.fetch = async () => Response.json({ detail: "evidence expired" }, { status: 410 });
+  const response = await GET_EVIDENCE(new Request("http://example.test"), { params: Promise.resolve({ id: "old-job" }) });
+  assert.equal(response.status, 410);
+  assert.equal((await response.json()).detail, "evidence expired");
+});

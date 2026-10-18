@@ -1,7 +1,7 @@
 {
-  "name": "LoopSight v2 — Active-Perception Vision Engine",
+  "name": "LoopSight — Evidence-Guided Visual Screening",
   "short_name": "LoopSight",
-  "description": "Active-Perception Optical Nephelometry & Metrology Engine for OpenCV AI Competition 2026",
+  "description": "Relative water-clarity and line-feature image screening with explicit evidence provenance",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0a1628",

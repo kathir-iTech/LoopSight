@@ -1,10 +1,9 @@
 import type { InspectionResult } from "./types";
 
 // ============================================================================
-// LoopSight v2 — Calibrated Benchmark & Demo Resilience Fixtures
+// LoopSight v2 — Explicit Synthetic Demonstration Fixtures
 //
-// Used only when DEMO_MODE=golden or when INFERENCE_API_URL is unreachable and
-// FAIL_CLOSED_PROD is not set. Mirrors the exact telemetry output of the real
+// Used only when DEMO_MODE=golden is explicitly configured. Mirrors example
 // OpenCV 5 backend across all 6 benchmark scenarios and 3 profiles.
 // ============================================================================
 
@@ -55,11 +54,11 @@ const GOLDEN_RESULTS: Record<string, InspectionResult> = {
       notes: "inpainted 3.7% specular glare pixels (cv2.INPAINT_TELEA, r=5.0) + dynamic range contrast recovery",
     },
     final_decision: {
-      decision: "PASS",
-      confidence_band: "medium",
-      human_approval_required: false,
+      decision: "REVIEW",
+      confidence_band: "low",
+      human_approval_required: true,
       reasoning: [
-        "second-pass pattern visibility 0.89 resolved toward clear water (no visible turbidity)",
+        "same-image processing raised visibility; capture a new photo under different lighting before clearing the sample",
       ],
     },
     overlay_data_url: "/samples/overlays/water_glare_confounded_overlay.png",
@@ -252,7 +251,6 @@ const GOLDEN_RESULTS: Record<string, InspectionResult> = {
           layer_alignment_deviation: 0.19,
           local_contrast: 0.21,
           glare_ratio: 0.108,
-          crack_width_mm: 0.24,
           crack_length_px: 64.0,
           crack_severity_score: 0.28,
           detection_method: "distance_transform_metrology",
@@ -271,19 +269,18 @@ const GOLDEN_RESULTS: Record<string, InspectionResult> = {
         {
           edge_continuity: 0.0,
           local_contrast: 0.14,
-          crack_width_mm: 0.0,
           crack_length_px: 0.0,
           crack_severity_score: 0.0,
         },
       ],
-      notes: "illumination-normalized distance-transform metrology: crack_width=0.000mm, length=0.0px, severity=0.000",
+      notes: "illumination-normalized distance-transform metrology: length=0.0px, severity=0.000",
     },
     final_decision: {
       decision: "PASS",
       confidence_band: "medium",
       human_approval_required: false,
       reasoning: [
-        "second-pass illumination-normalized metrology cleared shadow/surface artifact (width=0.00mm, severity=0.00)",
+        "second-pass illumination-normalized metrology cleared shadow/surface artifact (severity=0.00)",
       ],
     },
     overlay_data_url: "/samples/overlays/crack_shadow_confounded_overlay.png",
@@ -310,7 +307,6 @@ const GOLDEN_RESULTS: Record<string, InspectionResult> = {
           layer_alignment_deviation: 0.42,
           local_contrast: 0.19,
           glare_ratio: 0.0,
-          crack_width_mm: 0.719,
           crack_length_px: 151.0,
           crack_severity_score: 1.0,
           detection_method: "distance_transform_metrology",
@@ -354,8 +350,6 @@ const GOLDEN_RESULTS: Record<string, InspectionResult> = {
           skew_deg: 0.0,
           stratification_delta: 0.0,
           detection_method: "none",
-          estimated_ntu: 0.0,
-          who_tier: "INVALID_SAMPLE",
         },
       },
     ],
@@ -382,7 +376,7 @@ const GOLDEN_RESULTS: Record<string, InspectionResult> = {
 };
 
 // Legacy aliases
-GOLDEN_RESULTS.confident_pass = GOLDEN_RESULTS.water_glare_confounded;
+GOLDEN_RESULTS.confident_pass = GOLDEN_RESULTS.water_dual_lighting;
 GOLDEN_RESULTS.confident_fail = GOLDEN_RESULTS.water_turbid_fail;
 GOLDEN_RESULTS.uncertain = GOLDEN_RESULTS.water_dual_lighting;
 GOLDEN_RESULTS.no_pattern = GOLDEN_RESULTS.no_pattern_detected;
@@ -440,7 +434,7 @@ export function fixtureByCase(
   demoCase: string | undefined | null
 ): InspectionResult | null {
   const key = (demoCase || "").trim();
-  if (key in GOLDEN_RESULTS) {
+  if (Object.hasOwn(GOLDEN_RESULTS, key)) {
     return GOLDEN_RESULTS[key];
   }
   if (PRIMARY_KEYS.includes(key)) {
@@ -476,7 +470,7 @@ export function getJob(id: string): { id: string; result: InspectionResult; crea
 
   // 2. Check if ID directly matches any known benchmark case or legacy aliases
   const cleanKey = key.replace(/^job_/, "").replace(/^bm_/, "");
-  if (cleanKey in GOLDEN_RESULTS) {
+  if (Object.hasOwn(GOLDEN_RESULTS, cleanKey)) {
     return {
       id: key,
       result: GOLDEN_RESULTS[cleanKey],
@@ -491,28 +485,5 @@ export function getJob(id: string): { id: string; result: InspectionResult; crea
     };
   }
 
-  // 3. Check pattern hints in ID
-  if (cleanKey.startsWith("nopad") || cleanKey.includes("no_pattern")) {
-    return {
-      id: key,
-      result: GOLDEN_RESULTS.no_pattern_detected,
-      created_at: new Date().toISOString(),
-    };
-  }
-
-  // 4. Check profile hints in ID
-  if (key.includes("crack")) {
-    return {
-      id: key,
-      result: GOLDEN_RESULTS.crack_structural_fail,
-      created_at: new Date().toISOString(),
-    };
-  }
-
-  // 5. Default graceful fallback (never return 404 to judge or user on cold serverless lambdas)
-  return {
-    id: key,
-    result: GOLDEN_RESULTS.water_glare_confounded,
-    created_at: new Date().toISOString(),
-  };
+  return null;
 }

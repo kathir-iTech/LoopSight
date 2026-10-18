@@ -1,63 +1,117 @@
-# LoopSight v2 — Active-Perception Optical Nephelometry & Spatial Metrology Engine
+# LoopSight — evidence-guided visual screening
 
-**LoopSight v2** is an uncertainty-triggered **OpenCV 5 Active-Perception & Model Context Protocol (MCP) Vision Engine** built for the **OpenCV AI Competition 2026 (powered by AWS)**.
+LoopSight uses **OpenCV 5**, a bounded action controller and a deterministic
+screening policy to inspect images and request better evidence when uncertain.
+It targets the **OpenCV AI Competition 2026 powered by AWS**.
 
-Instead of treating a single camera frame as final—or letting an LLM hallucinate visual verdicts—LoopSight v2 uses **deterministic OpenCV 5 metrology** on Pass 1 to quantify both the primary signal and physical confounders (specular glass glare, perspective skew, vertical sediment stratification, dim ambient lighting, and surface shadows). When Pass 1 is `UNCERTAIN`, a bounded agent selects from **8 whitelisted OpenCV 5 tools** to acquire a materially different second observation before a deterministic policy (`cv/policy.py`) renders the final verdict.
+The primary workflow measures checkerboard visibility behind a water sample.
+Glare, exposure, framing and image detail can cause abstention. A follow-up
+photo under changed lighting is checked against the retained original before
+it influences the result. Crack-like pixel features and FDM surface inspection
+remain experimental profiles.
 
-## Key Highlights
+**These are relative image measurements.** NTU, drinking-water safety,
+structural safety and physical crack widths have not been validated and are
+not reported as measurements. Confidence labels are heuristic, not calibrated
+probabilities. [Current progress and remaining gaps](reports/BUILD_PROGRESS.md)
+contains the latest evidence; [the original audit](reports/STRICT_TECHNICAL_REVIEW.md)
+records why historical claims were withdrawn.
 
-- **3 Calibrated OpenCV 5 Inspection Profiles:**
-  1. `water_turbidity_v1` — Household drinking-water optical nephelometry (Secchi checkerboard visibility, HSV specular glare masking, perspective skew detection, and 3-zone vertical sediment stratification).
-  2. `structural_crack_metrology_v1` — Civil/structural crack inspection using bilateral noise suppression, morphological black-hat filament extraction, and Euclidean distance transform (`cv2.distanceTransform`) to measure calibrated **fracture width in millimeters (`mm`)**.
-  3. `fdm_print_surface_v1` — Manufacturing surface edge continuity and lighting-normalized (`cv2.equalizeHist`) reference comparison.
-- **8 Whitelisted OpenCV 5 Active-Perception Tools (Exposed via `/mcp/tools`):**
-  - `inpaint_specular_glare` (`cv2.inpaint` Telea + dynamic range contrast recovery)
-  - `rectify_perspective_homography` (`cv2.getPerspectiveTransform` + `cv2.warpPerspective`)
-  - `analyze_vertical_stratification` (3-stratum supernatant vs. settled bottom sediment analysis)
-  - `skeletonize_crack_metrology` (homomorphic Gaussian shadow removal + `cv2.distanceTransform` width in mm)
-  - `track_across_frames` (multi-lighting ambient → backlight fusion + `cv2.phaseCorrelate` sub-pixel shift)
-  - `reinspect_roi` (2x `cv2.INTER_CUBIC` super-sampling)
-  - `measure_edge_continuity` (high-sensitivity Canny 30/100 re-evaluation)
-  - `compare_to_reference` (histogram-equalized reference check)
-- **Proven Positive Conditional Benefit (`+0.7500` on Water, `+1.0000` on Crack Metrology):**
-  Across the 40-sample multi-condition dataset in `data/self_captured/`, LoopSight v2's adaptive policy (`Experiment C`, **100.0% accuracy**) decisively outperforms the single-pass baseline (`Experiment A`, **55.0%**), fixed 2x repeat (`Experiment B`, **40.0%**), and matched-observation-budget control (`Experiment B2`, **45.0%**).
-- **Responsible-AI Safety Guards:**
-  - Enforces **"Turbidity ≠ Potability"** across all UI screens and PDF exports: clear water can still contain invisible arsenic, fluoride, or nitrates.
-  - Returns `NO_PATTERN_DETECTED` when no reference checkerboard is present on water uploads rather than guessing on invalid input.
+## Implemented
 
-## Quickstart (Local Development)
+- Real uploaded-image OpenCV execution, eight bounded diagnostic tools and
+  optional Gemini tool selection. Final verdicts come from explicit policy.
+- First-pass evidence retained across workers, using bounded SQLite locally
+  or shared private S3 objects in cloud mode, with expiry and exact image hashes. Follow-ups reject duplicates,
+  incompatible framing and inconsistent appearance. Visual checks do not prove
+  physical sample identity or acquisition authenticity.
+- Actual first/second images accessible during evidence retention, with private
+  no-store responses. Expiry, missing evidence and backend failures remain errors.
+- Separate provenance for uploaded-image computation, synthetic benchmarks and
+  explicitly enabled demo fixtures. Unknown job IDs return 404.
+- JSON/PDF results and downloadable evidence ZIPs with image-unit scope, policy
+  snapshots, file manifests and observation counts. Same-image
+  enhancement is not counted as a new capture or used to clear uncertain water.
+- Manifest-based paired evaluation with exact requested-input budgets,
+  preparation-group/image split leakage checks, coverage and false-clear metrics.
+- A measured-results explorer at `/evaluation`, live backend/storage-read
+  status, and `/capture-guide` with a printable checkerboard.
 
-### 1. Backend (FastAPI + OpenCV 5 + MCP Server)
+## Run locally
+
+Use Python 3.13 and Node 20 or newer. From the repository root:
 
 ```bash
-pip install -r requirements.txt
-uvicorn services.inference.main:app --reload --port 8000
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt pytest httpx
+GEMINI_API_KEY= DYNAMO_TABLE_NAME= .venv/bin/python -m uvicorn services.inference.main:app --port 8000
 ```
 
-Verify endpoints:
-- `GET http://localhost:8000/version` — OpenCV version, profiles, and 8 MCP tools
-- `GET http://localhost:8000/mcp/tools` — Model Context Protocol tool schemas
-- `GET http://localhost:8000/samples` — Built-in 6-scenario benchmark catalog
-
-### 2. Frontend (Next.js 15 Interactive Workbench)
+In a separate terminal:
 
 ```bash
 cd apps/web
 npm ci
-npm run dev
+INFERENCE_API_URL=http://127.0.0.1:8000 npm run dev
 ```
 
-Open `http://localhost:3000` to upload images, use live camera capture with pre-flight telemetry, or run any of the **6 built-in benchmark scenarios in 1 click**.
+Open http://localhost:3000. Backend `/health`, `/ready`, `/version`, `/samples` and
+`/mcp/tools` expose readiness, runtime metadata, synthetic scenarios and tool
+schemas. Fonts are bundled locally. `.env.example` documents optional settings.
+Do not build and run a frontend server concurrently against the same `.next`.
 
-### 3. Run Tests & Evaluation Harness
+On Vercel, real inference requires `INFERENCE_API_URL`. Missing configuration
+returns 503. Only server-side `DEMO_MODE=golden` enables explicitly labeled
+fixtures; a request cannot enable demo mode. For AWS operation, use the
+[deployment guide](infra/aws/README.md) and set `LOOPSIGHT_EVIDENCE_BUCKET`.
+This selects shared S3 for jobs/captures; Lambda `/tmp` does not share SQLite.
+When backend token protection is enabled, set the matching server-only
+`INFERENCE_API_TOKEN` on Vercel. Prepared infrastructure is not a verified AWS
+deployment. No physical field performance is claimed by this checkout.
+
+## Verify and evaluate
 
 ```bash
-# Run all 50 automated tests (49 passing, 1 live-Gemini skipped unless GEMINI_API_KEY is set)
-python -m pytest services/inference/tests -v
-
-# Regenerate 40-image benchmark dataset, calibrate thresholds, and run Experiments A/B/B2/C
-python services/inference/scripts/generate_benchmark_dataset.py
-python services/inference/scripts/calibrate_thresholds.py data/self_captured
-python services/inference/scripts/run_experiments.py data/self_captured --profile water_turbidity_v1
-python services/inference/scripts/run_experiments.py --profile structural_crack_metrology_v1
+GEMINI_API_KEY=disabled .venv/bin/python -m pytest services/inference/tests -q
+.venv/bin/python services/inference/scripts/evaluate_captures.py data/synthetic_capture_manifest.json --json /tmp/paired-capture-regression.json
+cd apps/web
+npm test
+npm run build
+# Real desktop/mobile workflows; installs Chromium once if needed:
+npx playwright install chromium
+npm run test:e2e
 ```
+
+The committed dataset is entirely synthetic despite its historical
+`data/self_captured` directory name. The current binary-labeled regression
+manifest has 34 primary fixtures, five generator-family groups and six supplied
+synthetic companion images; six ambiguous-label fixtures are excluded.
+Single-pass accuracy including abstentions is **47.1%**; fixed, matched and
+adaptive acquisition each achieve **64.7%**, requesting the same six extra
+images. **This is a tie, not evidence of an adaptive advantage or field accuracy.**
+The detailed [report](reports/evidence/2026-10-18-paired-capture-regression.json)
+records hashes, thresholds and runtime versions. The old `run_experiments.py`
+is retained as a legacy diagnostic, not a validated matched-budget comparison.
+
+To verify persistence with the production frontend and backend running:
+
+```bash
+.venv/bin/python services/inference/scripts/smoke_recapture.py prepare
+# Restart only your backend, preserving the same SQLite file.
+.venv/bin/python services/inference/scripts/smoke_recapture.py verify
+```
+
+This synthetic transport check requires different backend runtime IDs and
+verifies retained first-pass evidence, pixel-identical capture retrieval and
+duplicate rejection. It does not validate physical measurements.
+
+Collect genuine independent data using the
+[capture protocol](data/captures/README.md). The [current rules recheck](reports/COMPETITION_RULES_RECHECK.md) confirms that
+teams without a grant proposal remain eligible for all prizes, and lists final
+submission requirements. No proposal or final entry was submitted by this agent.
+
+Cloud configuration is in `infra/aws/template.yaml`; it passes cfn-lint and the
+pinned runtime resolves to ARM64 wheels. These checks do not establish actual
+AWS execution. Upload requests are capped at 4 MB, photos at 3.5 MB in the UI,
+and analysis images are resized to at most 1024 pixels per side. See the current
+technical report for retention, bearer-link access and download-size limits.

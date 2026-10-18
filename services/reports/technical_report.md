@@ -1,91 +1,156 @@
-# LoopSight v2 — Technical Report (OpenCV AI Competition 2026)
+# LoopSight — current technical report
 
-> **Status:** Complete & verified against executed code, 49 automated tests, and the 40-sample multi-condition benchmark dataset (`data/self_captured/`). Zero `[PENDING]` placeholders remain.
->
-> **Verified Stack:** OpenCV 5 (`opencv-python-headless>=5.0.0`), FastAPI, Mangum (AWS Lambda ARM64), Model Context Protocol (`mcp/1.0` tool discovery), Google Gemini (`gemini-3.6-flash` bounded selector with deterministic fallback), SQLite write-through + DynamoDB `JobStore`, Next.js 15.5.23, React 19, Framer Motion, Tailwind CSS 4, jsPDF.
+Updated 18 October 2026. Prepared implementation and local evidence are reported
+separately from unverified cloud deployment and physical validation. This replaces
+the prior technical draft; historical claims remain only in Git history.
 
-## 1. Problem & Thesis — Uncertainty-Triggered Active Perception
+## Problem, users and scope
 
-Visual screening in field environments—whether checking household drinking-water turbidity in rural India or inspecting structural concrete cracks—suffers from a fundamental flaw when built as a single-shot pipeline: **environmental confounders masquerade as defects or hide real hazards.**
+LoopSight investigates uncertainty-aware relative water-clarity image screening.
+A checkerboard viewed through a sample supplies an image reference. Glare,
+lighting, framing and settled material can confound a single view. The intended
+interaction is measurement → uncertainty → specific new evidence → deterministic
+screening or abstention. User benefit and field reliability remain hypotheses
+until measured with independent samples and target users.
 
-- **Specular Glass Glare:** Curved glass reflections create saturated white blooms (`V >= 240, S <= 35`) that wash out a Secchi checkerboard pattern, causing a naive single-pass detector to misclassify clear water as uncertain or turbid.
-- **Vertical Sediment Stratification:** Settled mud/particulates at the bottom of a container leave the upper 2/3 supernatant clear, pulling a whole-frame average visibility score above the pass threshold (`> 0.55`) and causing a dangerous false pass.
-- **Dim Ambient Illumination:** Under-exposed room light depresses contrast across the pattern until a backlit second frame (`track_across_frames`) is captured.
-- **Surface Glare & Cast Shadows in Crack Metrology:** Shadows and surface reflections trigger false fracture alarms unless homomorphic illumination normalization and Euclidean distance transform (`cv2.distanceTransform`) isolate true sub-millimeter crack walls.
+PASS indicates the policy found high pattern visibility; FAIL indicates a low
+visibility/image-feature signal; REVIEW means insufficient evidence. Missing
+reference targets are rejected with NO_PATTERN_DETECTED. These outcomes do not
+certify water safety, turbidity in NTU, physical crack width or structural safety.
+Image confidence labels are heuristic, not calibrated probabilities.
 
-**LoopSight v2 Thesis:** An inspection controller that measures first-pass OpenCV 5 evidence alongside explicit confounder telemetry (`glare_ratio`, `skew_deg`, `stratification_delta`, `local_contrast`, `crack_width_mm`), and dispatches a bounded agent to invoke a **materially different OpenCV 5 second-look tool**, decisively outperforms both a single-pass baseline (`Experiment A`), a fixed 2x-upsample repeat (`Experiment B`), and a cost-matched random repeat control (`Experiment B2`).
+## Implementation
 
-## 2. Architecture & MCP OpenCV 5 Tool Registry
+The Next.js 15.5.23/React interface accepts camera/upload input, shows original and
+follow-up evidence, exposes failure reasons and exports PDF/JSON/evidence ZIP.
+The printable target and capture guide support consistent framing. The
+interactive evaluation page reads the committed report rather than demonstration
+fixtures. Real proxy failures remain errors; saved fixtures require explicit
+server-side DEMO_MODE=golden and retain demo provenance.
 
-```
-Browser / Live Camera / 1-Click Judge Test Bench (apps/web)
-  │  Client pre-flight gate: dimensions, contrast std/128, specular glare %
-  ▼
-POST /api/inspect ──► FastAPI + MCP Server (services/inference/main.py)
-  │
-  ├─► 1. First-Pass Deterministic OpenCV 5 Metrology (cv/first_pass.py)
-  │      • water_turbidity_v1: findChessboardCorners (CALIB_CB_FAST_CHECK) +
-  │        contour quad geometry + Laplacian sharpness + HSV specular glare +
-  │        minAreaRect skew_deg + 3-zone vertical stratification_delta
-  │      • structural_crack_metrology_v1: bilateralFilter + MORPH_BLACKHAT +
-  │        connectedComponentsWithStats + cv2.distanceTransform (crack_width_mm)
-  │      • fdm_print_surface_v1: Canny(50,150) + equalizeHist absdiff similarity
-  │
-  ├─► If CONFIDENT_PASS / CONFIDENT_FAIL ──► cv/policy.decide() (0 agent calls)
-  │
-  └─► If UNCERTAIN ──► Bounded Agent Selector (agent/tool_selector.py)
-                       │  Double-enforced 8-tool whitelist + 15s timeout + fallback
-                       ▼
-                  OpenCV 5 Active-Perception Tool Registry (cv/tools.py & /mcp/tools)
-                       ├─ inpaint_specular_glare          (cv2.inpaint TELEA + dynamic range recovery)
-                       ├─ rectify_perspective_homography  (cv2.getPerspectiveTransform + warpPerspective)
-                       ├─ analyze_vertical_stratification (3-stratum supernatant vs sediment nephelometry)
-                       ├─ skeletonize_crack_metrology     (homomorphic Gaussian division + distanceTransform mm)
-                       ├─ track_across_frames             (multi-lighting persistence_std + phaseCorrelate shift)
-                       ├─ reinspect_roi                   (2x INTER_CUBIC super-sampling)
-                       ├─ measure_edge_continuity         (sensitive Canny 30/100 re-evaluation)
-                       └─ compare_to_reference            (histogram-equalized reference check)
-                       │
-                       ▼
-                  cv/policy.decide(first_pass, second_pass_region)
-                       ──► PASS / REVIEW / FAIL / NO_PATTERN_DETECTED
-                       ──► Annotated OpenCV 5 Overlay PNG (overlay_data_url)
-                       ──► SqliteJobStore / DynamoJobStore persistence
-```
+OpenCV 5 first-pass analysis uses checkerboard/contour evidence, sharpness,
+contrast, specular masking, perspective and vertical-variation features. Eight
+whitelisted tools support crop reinspection, reference comparison, edge
+continuity, glare diagnostics, perspective rectification, vertical analysis,
+crack-like feature extraction and across-frame analysis. Deterministic action
+selection is the tested default; optional Gemini selects bounded tool arguments
+with a finite timeout, one attempt and per-inspection permitted tools. No live
+Gemini superiority is claimed.
 
-## 3. Matched-Budget Experimental Evaluation (Experiments A, B, B2, C)
+For uncertain water, processing the same image cannot supply a new observation
+or clear the sample. The controller requests a changed-lighting capture. A new
+pair must be distinct, retain compatible aspect ratio, have sufficient detail,
+acceptable translation, appearance correlation and overlap. The second image is
+registered and evaluated in a common crop. If it remains ambiguous the result
+stays REVIEW. This is appearance/translation consistency, not physical sample
+identity verification or proof that a new camera exposure occurred.
 
-Executed via `python services/inference/scripts/run_experiments.py data/self_captured --profile water_turbidity_v1` across **N = 40** labeled benchmark images (`8 clear`, `8 turbid`, `6 clear_glare`, `6 turbid_stratified`, `6 clear_dim_backlit` pairs, `6 borderline`):
+The explicit water policy uses dimensionless visibility cutoffs (0.20 low and
+0.55 high) with additional confounder checks. Crack-like widths are analysis
+pixels; crack and FDM profiles are experimental. Uploaded analysis images are
+bounded to 1024 pixels per side and overlays to 768. Resizing changes pixel
+measurements, so no physical scale is inferred. Each inspection stores the actual
+threshold/source snapshot and fingerprint; an altered policy rejects continuation
+of an old capture session rather than silently reinterpreting it.
 
-| Experiment | Policy Description | Accuracy | Trigger Rate | Resolution Rate | False Trigger | Missed Trigger | Conditional Benefit |
-|---|---|---:|---:|---:|---:|---:|---:|
-| **A** | Single-pass baseline (`UNCERTAIN` left as `REVIEW`) | `0.5500` (55.0%) | `0.0000` | `0.0000` | `0.0000` | `0.6000` | `+0.0000` |
-| **B** | Fixed two-pass (`reinspect_roi` 2x crop on every `UNCERTAIN`) | `0.4000` (40.0%) | `0.6000` | `0.5000` | `0.0000` | `0.0000` | `-0.2500` |
-| **B2** | Matched observation budget control (deterministic hash subset) | `0.4500` (45.0%) | `0.4000` | `0.3750` | `0.0000` | `0.2000` | `-0.1667` |
-| **C** | **LoopSight v2 Adaptive Active Perception (8-tool OpenCV 5)** | **`1.0000` (100.0%)** | **`0.6000`** | **`0.7500`** | **`0.0000`** | **`0.0000`** | **`+0.7500`** |
+## Architecture and storage
 
-### Structural Crack Metrology Evaluation (`structural_crack_metrology_v1`, N = 6)
+See [the architecture diagram](../../reports/ARCHITECTURE.md).
 
-| Experiment | Accuracy | Trigger Rate | Resolution Rate | False Trigger | Conditional Benefit |
-|---|---:|---:|---:|---:|---:|
-| **A** (Single-pass) | `0.6667` | `0.0000` | `0.0000` | `0.0000` | `+0.0000` |
-| **B2** (Matched budget) | `0.6667` | `0.0000` | `0.0000` | `0.0000` | `+0.0000` |
-| **C** (**LoopSight v2 Adaptive**) | **`1.0000`** | **`0.3333`** | **`1.0000`** | **`0.0000`** | **`+1.0000`** |
+Local SQLite retains captures/jobs with capacity bounds and expiry. Cloud mode
+uses a private S3 bucket for jobs and atomic lossless PNG/session bundles. A fresh
+adapter instance can retrieve all evidence without a process cache. Each object
+has a payload hash, expiry metadata and server-side encryption; capture bundles
+also verify decoded pixel hashes. Cloud errors return 503 instead of falling back
+to memory. The optional legacy DynamoDB job adapter surfaces outages and rejects
+oversized inline items; the primary deployment uses S3 to avoid that item limit.
 
-### Per-Label Calibration Distribution (`calibrate_thresholds.py data/self_captured`)
+Captures default to 30-minute access, jobs to 24 hours. Local cleanup occurs on
+save/access; S3 lifecycle deletion is asynchronous. Server expiry is not an
+exact-time erasure guarantee. Downloaded copies do not expire. Random result links
+are bearer links, so recipients can access retained evidence during its lifetime.
 
-| Label | Count | `pattern_visibility` (min–max, mean ± std) | `pattern_sharpness` (mean) | `local_contrast` (mean) | Active-Perception Resolution |
-|---|---:|---|---:|---:|---|
-| `clear` | 8 | `0.7920 – 0.8201` (`0.8064 ± 0.0089`) | `1.0000` | `0.7154` | Pass 1 `CONFIDENT_PASS` → `PASS` |
-| `turbid` | 8 | `0.0992 – 0.1309` (`0.1144 ± 0.0100`) | `0.0415` | `0.2221` | Pass 1 `CONFIDENT_FAIL` → `FAIL` |
-| `clear_glare` | 6 | `0.5204 – 0.5222` (`0.5212 ± 0.0007`) | `0.6653` | `0.3385` | Pass 1 `UNCERTAIN` (`glare=3.7%`) → `inpaint_specular_glare` (`0.893`) → `PASS` |
-| `turbid_stratified` | 6 | `0.4426 – 0.4454` (`0.4446 ± 0.0010`) | `0.4480` | `0.4141` | Pass 1 `UNCERTAIN` (`strat_delta=0.471`) → `analyze_vertical_stratification` (`0.042`) → `FAIL` |
-| `clear_dim_backlit` | 6 pairs | `0.3255` (ambient) → `0.8011` (backlight) | `0.1306` → `1.0000` | `0.3105` → `0.7032` | Pass 1 `UNCERTAIN` → `track_across_frames` (`0.793`) → `PASS` |
-| `borderline` | 6 | `0.2897 – 0.2912` (`0.2903 ± 0.0004`) | `0.0600` | `0.3089` | Pass 1 `UNCERTAIN` → `track_across_frames` (`0.287`) → `REVIEW` |
+Evidence ZIPs include analysis PNGs (not original upload bytes), optional
+reference/second images, overlay, original result, policy snapshot, session
+metadata and a file-byte SHA-256 manifest. Result frame hashes use decoded pixels
+and shape instead; both bases are documented. Hashes expose modifications but do
+not authenticate sensor provenance, capture time or ground truth. ZIP responses
+above the 4 MB web budget return an explicit error rather than a broken download.
 
-## 4. Responsible AI & Safety Architecture
+## AWS deployment preparation and current limits
 
-1. **Turbidity ≠ Potability (Enforced Across All Surfaces):** Clear-looking water can still contain dissolved arsenic, fluoride, nitrates, or pathogens invisible to optical cameras. LoopSight v2 never claims water is "safe to drink." Every `PASS` state explicitly displays: *"No visible turbidity detected — this does not confirm the water is safe. Invisible contaminants (arsenic, fluoride, nitrate) require a real water test."*
-2. **Invalid-Input Refusal (`NO_PATTERN_DETECTED`):** If a user uploads a non-water photo or omits the reference checkerboard (`pattern_found == False` across both passes), `cv/policy.py` refuses to issue a turbidity verdict and returns `NO_PATTERN_DETECTED`.
-3. **LLM Never Renders the Verdict:** Gemini is restricted via double-enforced whitelist (`validate_tool_call`) to choosing one of 8 deterministic OpenCV 5 tools. Final decisions are computed exclusively by `cv/policy.py`.
-4. **Pixel-Bomb & Input Hardening:** Uploads >10 MiB return HTTP 413; corrupt/non-image payloads return HTTP 400; images >25 MP are rejected and frames >2048 px are area-downsampled before processing.
+[CloudFormation](../../infra/aws/template.yaml) targets Lambda ARM64 with private
+encrypted S3, scoped object/bucket permissions, generated Secrets Manager backend
+token, reserved concurrency two, seven-day logs and an error alarm. The Vercel
+proxy forwards the token server-side. The script uses a clean committed revision,
+ARM64 builder, ECR image digest and stack deployment; failures are not suppressed.
+
+This environment has no AWS configuration/credential path or Vercel project token
+available. The actual account deployment, production backend configuration and cloud
+cross-instance retrieval have **not** been verified. The packaged Lambda image
+now builds and runs on a native ARM64 GitHub runner through AWS's runtime emulator,
+including OpenCV inspection and stored retrieval. CloudFormation lint and ARM64
+binary-wheel dependency resolution also pass. These do not establish an AWS
+account deployment or cloud S3 execution. See the
+[native verification metadata](../../reports/evidence/2026-10-18-native-arm64-lambda.json). AWS costs depend on the account and
+traffic; no free-tier guarantee is made. COOL is not integrated.
+
+## Reliability and resource protection
+
+Requests are bounded to 4,000,000 bytes before multipart parsing, including
+chunked bodies. Header-level PNG/JPEG/WebP dimensions are checked before OpenCV
+decode; images above 25 megapixels are rejected. Uploads retain a combined web
+budget and clear smaller-photo instructions. CPU-heavy work uses a thread pool,
+with bounded admitted POST work and two inspection slots. Busy requests return
+429 with Retry-After; liveness remains available. Reference/second-image errors
+and storage failures must remain actionable rather than inventing a verdict.
+
+Backend token protection, private no-store capture/archive responses, scoped
+cloud permissions and TTL are implemented. This is a hackathon public-web path,
+not a complete multi-tenant authentication/rate-limit system. A production service
+would need a reviewed identity/abuse policy, monitoring destinations, account
+budgets and an appropriate deletion/incident process.
+
+## Evaluation
+
+The paired manifest uses **34 generated binary-labeled primary fixtures**, five
+generator-family groups and six supplied synthetic companion images. Six
+ambiguous-label fixtures are excluded. No physical dataset or independent test
+population is represented. Split validation rejects group/image leakage; declared
+group provenance still needs human review.
+
+| Strategy | Accuracy incl. abstentions | Coverage | Extra image inputs |
+|---|---:|---:|---:|
+| Single | 47.1% | 47.1% | 0 |
+| Fixed capture | 64.7% | 64.7% | 6 |
+| Exact-budget matched | 64.7% | 64.7% | 6 |
+| Adaptive capture | 64.7% | 64.7% | 6 |
+
+All available pairs are from uncertain cases, so the extra-capture strategies
+choose the same six pairs. This is a tie, with no established adaptive advantage.
+Zero false clears on these fixtures is not a safety guarantee. No confidence
+interval, statistical significance, calibrated NTU/mm accuracy or real-world
+impact is inferred. Strong fixed-processing/Gemini controls and an independent
+physical blind set remain future evidence.
+
+The [report](../../reports/evidence/2026-10-18-paired-capture-regression.json)
+records per-case outcomes, image hashes, rejected pairs, exact requested-input
+budgets, thresholds, source hashes and runtime versions. It measures image-input
+allocation, not equal compute cost/time or acquisition authenticity. The old
+run_experiments harness is retained only as a legacy diagnostic.
+
+## Verification and reproduction
+
+Run the backend tests and evaluator using [README instructions](../../README.md),
+then frontend API tests/build and `npm run test:e2e`. Browser tests exercise a
+real backend/production frontend on desktop/mobile: first upload, actual follow-up,
+reload, evidence download, duplicate rejection, evaluation filtering/download,
+and a controlled outage. S3 tests simulate a service contract with separate store
+instances; they are not an AWS deployment test. The committed deployed-smoke
+helper requires actual runtime architecture/shared storage/revision on a real URL.
+
+Independent capture collection is documented [here](../../data/captures/README.md).
+Remaining requirements and honest completion statuses are in the
+[submission checklist](../../reports/SUBMISSION_CHECKLIST.md). No Devpost entry
+or grant form was submitted by this agent. The official linked grant form
+explicitly permits prize eligibility without a proposal or grant.

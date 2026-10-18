@@ -112,10 +112,10 @@ def test_valid_image_still_succeeds():
     assert job.status_code == 200
 
 
-def test_concurrent_requests_all_succeed_and_are_independent():
+def test_concurrent_requests_are_bounded_and_successful_jobs_are_independent():
     """Fire several /inspect calls through one shared TestClient concurrently;
-    every one must return a real job_id and each job must be retrievable — no
-    cross-contamination or crash."""
+    accepted requests must return retrievable jobs; busy responses must be
+    retryable without creating a verdict. No cross-contamination or crash."""
     import threading
 
     results = [None] * 6
@@ -143,7 +143,12 @@ def test_concurrent_requests_all_succeed_and_are_independent():
 
     for i, r in enumerate(results):
         assert errors[i] is None, f"thread {i} raised: {errors[i]}"
-        assert r is not None and r.status_code == 200, f"thread {i}: {r!r}"
+        assert r is not None and r.status_code in {200, 429}, f"thread {i}: {r!r}"
+        if r.status_code == 429:
+            assert r.headers["retry-after"] == "2"
+            assert "job_id" not in r.json()
+            r = _post({"image": ("retry.png", _png_bytes(), "image/png")})
+        assert r.status_code == 200
         job_id = r.json()["job_id"]
         job = client.get(f"/jobs/{job_id}")
         assert job.status_code == 200, f"job {job_id} not retrievable: {job.text}"
@@ -158,7 +163,7 @@ TESTS = [
     test_oversized_upload_reject_with_413,
     test_unknown_profile_reject_with_400,
     test_valid_image_still_succeeds,
-    test_concurrent_requests_all_succeed_and_are_independent,
+    test_concurrent_requests_are_bounded_and_successful_jobs_are_independent,
 ]
 
 if __name__ == "__main__":
