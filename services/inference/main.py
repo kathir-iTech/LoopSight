@@ -9,7 +9,7 @@ Exposes:
   GET  /health                   — Liveness probe
   GET  /mcp/tools                — Model Context Protocol (MCP) OpenCV tool discovery
   POST /mcp/call                 — Direct MCP tool execution over base64 or sample image
-  GET  /samples                  — Catalog of 7 physics-calibrated benchmark samples
+  GET  /samples                  — Catalog of generated synthetic benchmark samples
   POST /inspect/sample/{case_id} — Run the real OpenCV 5 + Agent pipeline on a benchmark sample
 """
 
@@ -21,6 +21,12 @@ import json
 import logging
 import os
 import platform
+import hmac
+import io
+import threading
+import hashlib
+from dataclasses import asdict
+from functools import wraps
 import sqlite3
 import sys
 import time
@@ -64,9 +70,12 @@ logger = logging.getLogger(__name__)
 
 import cv2
 import numpy as np
+from PIL import Image, UnidentifiedImageError
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import UploadFile
 
 from cv.first_pass import run_first_pass, PROFILES  # type: ignore
 from cv.tools import TOOL_REGISTRY  # type: ignore
@@ -76,8 +85,12 @@ from storage import create_job_store, InMemoryJobStore  # type: ignore
 import demo_golden  # type: ignore
 from evidence import MEASUREMENT_CONTRACT
 from capture_sessions import SqliteCaptureSessionStore, CaptureSessionError, frame_digest, validate_capture_pair
+from cloud_storage import create_capture_store, StorageUnavailable
+from request_limits import BodyLimitMiddleware
+from evidence_bundle import build_evidence_bundle
 
 app = FastAPI(title="LoopSight v2 Active-Perception Inference & MCP Server", version="0.2.0")
+_request_slots = threading.BoundedSemaphore(4)
 
 try:
     from mangum import Mangum  # type: ignore
@@ -93,16 +106,29 @@ _allow_origins = [o.strip() for o in _cors_env.split(",") if o.strip()] if _cors
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allow_origins,
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(BodyLimitMiddleware)
 
 
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
+    token = os.environ.get("LOOPSIGHT_API_TOKEN", "")
+    if token and request.url.path not in {"/health", "/version"}:
+        if not hmac.compare_digest(request.headers.get("authorization", ""), "Bearer " + token):
+            return JSONResponse({"detail": "backend authentication required"}, status_code=401)
     req_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
-    response = await call_next(request)
+    limited = request.method == "POST"
+    if limited and not _request_slots.acquire(blocking=False):
+        return JSONResponse({"detail": "Inspection capacity is busy. Retry shortly."}, status_code=429,
+                            headers={"Retry-After": "2"})
+    try:
+        response = await call_next(request)
+    finally:
+        if limited:
+            _request_slots.release()
     response.headers["X-Request-ID"] = req_id
     return response
 
@@ -111,12 +137,31 @@ JOBS: Dict[str, dict] = {}
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_PIXELS = 25_000_000  # 25 MP pixel-bomb guard
+_work_slots = threading.BoundedSemaphore(int(os.environ.get("LOOPSIGHT_MAX_CONCURRENT_INSPECTIONS", "2")))
+POLICY_SOURCES = {name: hashlib.sha256((Path(__file__).parent / "cv" / name).read_bytes()).hexdigest()
+                  for name in ["first_pass.py", "policy.py", "tools.py"]}
+POLICY_FINGERPRINT = hashlib.sha256(json.dumps({"source": POLICY_SOURCES, "upload_analysis_side_limit": 1024}, sort_keys=True).encode()).hexdigest()
+
+
+def bounded_work(fn):
+    @wraps(fn)
+    def execute(*args, **kwargs):
+        if not _work_slots.acquire(blocking=False):
+            raise HTTPException(status_code=429, detail="Inspection capacity is busy. Retry shortly.", headers={"Retry-After": "2"})
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _work_slots.release()
+    return execute
 
 store = create_job_store(JOBS)
-capture_store = SqliteCaptureSessionStore(
-    os.environ.get("LOOPSIGHT_CAPTURE_DB_PATH") or os.environ.get("LOOPSIGHT_SQLITE_PATH") or "/tmp/loopsight_jobs.sqlite3",
-    ttl_seconds=int(os.environ.get("LOOPSIGHT_CAPTURE_TTL_SECONDS", "1800")),
-)
+capture_store = create_capture_store()
+
+
+@app.exception_handler(StorageUnavailable)
+async def storage_error(_request: Request, _error: StorageUnavailable):
+    logger.error("durable evidence storage unavailable")
+    return JSONResponse({"detail": "Evidence storage is unavailable. Retry the inspection."}, status_code=503)
 
 
 @app.exception_handler(CaptureSessionError)
@@ -129,6 +174,18 @@ def _decode_image(data: bytes) -> np.ndarray:
     with pixel-dimension cap protection."""
     if not data:
         raise ValueError("empty image file")
+    try:
+        with Image.open(io.BytesIO(data)) as header:
+            if header.format not in {"PNG", "JPEG", "WEBP"}:
+                raise ValueError("unsupported image format; use PNG, JPEG or WebP")
+            w, h = header.size
+            if w <= 0 or h <= 0 or w * h > MAX_IMAGE_PIXELS:
+                raise ValueError("image dimensions exceed the maximum pixel budget")
+            if min(w, h) < 64 or max(w, h) / min(w, h) > 8:
+                raise ValueError("use an image at least 64 pixels per side with a practical target framing")
+            header.verify()
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
+        raise ValueError("could not decode image — unsupported format or corrupt data") from error
     nparr = np.frombuffer(data, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
@@ -136,8 +193,8 @@ def _decode_image(data: bytes) -> np.ndarray:
     h, w = img.shape[:2]
     if h * w > MAX_IMAGE_PIXELS:
         raise ValueError(f"image dimensions {w}x{h} exceed maximum pixel budget ({MAX_IMAGE_PIXELS} px)")
-    if max(h, w) > 2048:
-        scale = 2048.0 / float(max(h, w))
+    if max(h, w) > 1024:
+        scale = 1024.0 / float(max(h, w))
         img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
     return img
 
@@ -156,6 +213,9 @@ def _render_diagnostic_overlay_data_url(
         vis = frame.copy()
         if vis.ndim == 2:
             vis = cv2.cvtColor(vis, cv2.COLOR_GRAY2BGR)
+        if max(vis.shape[:2]) > 768:
+            scale = 768 / max(vis.shape[:2])
+            vis = cv2.resize(vis, (max(1, round(vis.shape[1] * scale)), max(1, round(vis.shape[0] * scale))))
         h, w = vis.shape[:2]
         color_map = {
             "PASS": (248, 189, 56),   # cyan-blue BGR
@@ -363,18 +423,10 @@ def _run_tool(
 
 @app.get("/")
 async def health():
-    try:
-        if isinstance(store, InMemoryJobStore):
-            count = len(store.store)
-        else:
-            count = 0
-    except Exception:
-        count = 0
     return {
         "status": "ok",
         "service": "loopsight-inference",
         "version": "0.2.0",
-        "jobs": count,
         "store": type(store).__name__,
         "mcp_enabled": True,
     }
@@ -383,6 +435,20 @@ async def health():
 @app.get("/health")
 async def health_alt():
     return {"status": "ok"}
+
+
+@app.get("/ready")
+def readiness():
+    # Probe actual read permissions without mutating evidence. A real upload smoke
+    # is still required to verify writes and cross-instance behavior.
+    store.get("0" * 32)
+    try:
+        capture_store.load("0" * 32)
+    except CaptureSessionError as error:
+        if error.status_code != 404:
+            raise
+    return {"status": "ready", "jobs": type(store).__name__, "captures": type(capture_store).__name__,
+            "storage_write_verified": False}
 
 
 BUILD_TIMESTAMP = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -396,6 +462,7 @@ async def version():
     return {
         "opencv_version": cv2.__version__,
         "measurement_contract": MEASUREMENT_CONTRACT,
+        "policy_fingerprint": POLICY_FINGERPRINT,
         "python_version": platform.python_version(),
         "runtime_architecture": platform.machine(),
         "runtime_instance_id": RUNTIME_INSTANCE_ID,
@@ -405,6 +472,9 @@ async def version():
         "mcp_tools_count": len(MCP_TOOL_DESCRIPTORS),
         "gemini_model": gemini_model,
         "build_timestamp": BUILD_TIMESTAMP,
+        "build_revision": os.environ.get("LOOPSIGHT_BUILD_REVISION", "unversioned-local"),
+        "storage": {"jobs": type(store).__name__, "captures": type(capture_store).__name__,
+                    "shared_across_instances": type(store).__name__ == "S3JobStore" and type(capture_store).__name__ == "S3CaptureSessionStore"},
     }
 
 
@@ -514,7 +584,7 @@ async def mcp_json_rpc(request: Request):
                 if not isinstance(image_b64, str) or len(image_b64) > 4 * ((MAX_UPLOAD_BYTES + 2) // 3):
                     raise ValueError("encoded image exceeds upload limit")
                 img_bytes = base64.b64decode(image_b64, validate=True)
-                frame = _decode_image(img_bytes)
+                frame = await run_in_threadpool(_decode_image, img_bytes)
             except Exception as e:
                 return JSONResponse({
                     "jsonrpc": "2.0",
@@ -538,20 +608,20 @@ async def mcp_json_rpc(request: Request):
                 if len(second_b64) > 4 * ((MAX_UPLOAD_BYTES + 2) // 3):
                     raise ValueError("second image exceeds upload limit")
                 second_bytes = base64.b64decode(second_b64, validate=True)
-                second_frame = _decode_image(second_bytes)
+                second_frame = await run_in_threadpool(_decode_image, second_bytes)
                 aligned_second, pair_report = validate_capture_pair(frame, second_frame)
                 x, y, width, height = pair_report["crop"]
-                tool_res = fn([frame[y:y + height, x:x + width], aligned_second], (0, 0, width, height))
+                tool_res = await run_in_threadpool(bounded_work(fn), [frame[y:y + height, x:x + width], aligned_second], (0, 0, width, height))
             elif tool_name in ("reinspect_roi", "compare_to_reference"):
-                tool_res = fn(frame, None, roi)
+                tool_res = await run_in_threadpool(bounded_work(fn), frame, None, roi)
             elif tool_name == "inpaint_specular_glare":
-                tool_res = fn(frame, roi, radius=float(args.get("radius", 5.0)))
+                tool_res = await run_in_threadpool(bounded_work(fn), frame, roi, radius=float(args.get("radius", 5.0)))
             elif tool_name == "skeletonize_crack_metrology":
-                tool_res = fn(frame, roi)
+                tool_res = await run_in_threadpool(bounded_work(fn), frame, roi)
             elif tool_name == "measure_edge_continuity":
-                tool_res = fn(frame, roi, low=int(args.get("low", 30)), high=int(args.get("high", 100)))
+                tool_res = await run_in_threadpool(bounded_work(fn), frame, roi, low=int(args.get("low", 30)), high=int(args.get("high", 100)))
             else:
-                tool_res = fn(frame, roi)
+                tool_res = await run_in_threadpool(bounded_work(fn), frame, roi)
 
             reg = tool_res.region
             telemetry = {
@@ -666,10 +736,11 @@ def _generate_sample_frames(sample_id: str) -> tuple[np.ndarray, Optional[np.nda
 
 @app.get("/samples")
 async def list_samples():
-    """Return the built-in physics-calibrated benchmark samples for the 1-click Judge Test Bench."""
+    """Return the generated synthetic benchmark samples for the 1-click Judge Test Bench."""
     return {"samples": SAMPLE_CATALOG}
 
 
+@bounded_work
 def _execute_inspection_pipeline(
     frame: np.ndarray,
     profile_name: str,
@@ -743,6 +814,9 @@ def _execute_inspection_pipeline(
                  "sha256": frame_digest(second_frame), "sha256_basis": "decoded_analysis_pixels", "timestamp_source": "server_received"},
             ]
             second_quality = run_first_pass(aligned_second, None, [(0, 0, cw, ch)], profile_name=profile_name)
+        elif tool_call.tool == "track_across_frames":
+            # A requested recapture is a normal pending action, not a failed tool.
+            tool_result = None
         else:
             try:
                 tool_result = _run_tool(tool_call, frame, reference, roi, profile_name=profile_name)
@@ -827,6 +901,8 @@ def _execute_inspection_pipeline(
 
     result: dict = {
         "measurement_contract": MEASUREMENT_CONTRACT,
+        "policy_snapshot": {"fingerprint": POLICY_FINGERPRINT, "source_sha256": POLICY_SOURCES,
+                            "thresholds": asdict(PROFILES[profile_name]), "upload_analysis_side_limit": 1024},
         "provenance": {
             "execution_mode": execution_mode,
             "runtime_instance_id": RUNTIME_INSTANCE_ID,
@@ -902,12 +978,13 @@ def _execute_inspection_pipeline(
         "instructions": instructions if can_recapture else [],
         "parent_job_id": original_job_id,
     }
-    if can_recapture or independent_capture_used:
+    if execution_mode != "demo_fixture":
         try:
             expires_at = capture_store.save(job_id, frame, reference, {
                 "profile": profile_name, "timestamp": first_frame_timestamp, "lighting": first_lighting,
                 "execution_mode": execution_mode,
                 "can_recapture": can_recapture,
+                "policy_fingerprint": POLICY_FINGERPRINT,
             }, second_frame=second_frame if independent_capture_used else None)
         except (sqlite3.Error, OSError) as error:
             logger.error("capture persistence failed: %s", type(error).__name__)
@@ -924,15 +1001,16 @@ def _execute_inspection_pipeline(
 
     try:
         store.save(job_id, result)
-    except Exception as e:
-        logger.error(f"[inspect] store.save failed job_id={job_id}: {e}")
-        JOBS[job_id] = result
+    except (StorageUnavailable, CaptureSessionError):
+        raise
+    except Exception as error:
+        raise StorageUnavailable("inspection result could not be saved") from error
 
     return job_id, result
 
 
 @app.post("/inspect/sample/{sample_id}")
-async def inspect_sample(sample_id: str):
+def inspect_sample(sample_id: str):
     """Run the real OpenCV 5 + Agent pipeline on one of the generated synthetic
     benchmark samples and return {job_id, sample_id, profile}."""
     try:
@@ -955,17 +1033,21 @@ async def inspect_sample(sample_id: str):
 @app.post("/inspect")
 async def inspect(request: Request):
     """Multipart form endpoint for image inspection across all profiles."""
-    form = await request.form()
+    form = await request.form(max_files=3, max_fields=20)
+    file_fields = {"image", "file", "reference_image", "reference", "referenceImage",
+                   "image2", "second_image", "lighting_image2", "secondImage"}
+    for name, value in form.multi_items():
+        if isinstance(value, UploadFile) and name not in file_fields:
+            raise HTTPException(status_code=400, detail=f"field '{name}' must be text")
+        if name in file_fields and not isinstance(value, UploadFile):
+            raise HTTPException(status_code=400, detail=f"field '{name}' must be an image file")
 
     golden = demo_golden.resolve_golden_from_request(form)
     if golden is not None:
         golden = {**golden, "provenance": {"execution_mode": "demo_fixture"},
                   "measurement_contract": MEASUREMENT_CONTRACT}
-        golden_job_id = uuid.uuid4().hex[:8]
-        try:
-            store.save(golden_job_id, golden)
-        except Exception:
-            JOBS[golden_job_id] = golden
+        golden_job_id = uuid.uuid4().hex
+        store.save(golden_job_id, golden)
         return JSONResponse({"job_id": golden_job_id})
 
     # Also allow running a named benchmark sample via form field sample_id
@@ -975,7 +1057,7 @@ async def inspect(request: Request):
         if sid:
             try:
                 frame1, frame2, prof = _generate_sample_frames(sid)
-                job_id, _ = _execute_inspection_pipeline(
+                job_id, _ = await run_in_threadpool(_execute_inspection_pipeline,
                     frame=frame1,
                     profile_name=prof,
                     second_frame=frame2,
@@ -1023,23 +1105,21 @@ async def inspect(request: Request):
 
     t0 = time.perf_counter()
     try:
-        frame = _decode_image(data)
+        frame = await run_in_threadpool(_decode_image, data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     decode_ms = (time.perf_counter() - t0) * 1000
 
     reference = None
     ref_upload = form.get("reference_image") or form.get("reference") or form.get("referenceImage")
-    if ref_upload is not None and hasattr(ref_upload, "read"):
+    if ref_upload is not None:
         try:
             ref_data = await ref_upload.read()  # type: ignore
-            if ref_data and len(ref_data) <= MAX_UPLOAD_BYTES:
-                try:
-                    reference = _decode_image(ref_data)
-                except ValueError:
-                    reference = None
-        except Exception:
-            reference = None
+            if len(ref_data) > MAX_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="reference image exceeds the upload limit")
+            reference = await run_in_threadpool(_decode_image, ref_data)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=f"invalid reference image: {error}") from error
 
     second_frame: Optional[np.ndarray] = None
     second_upload = form.get("image2") or form.get("second_image") or form.get("lighting_image2") or form.get("secondImage")
@@ -1061,7 +1141,7 @@ async def inspect(request: Request):
         if len(sec_data) > MAX_UPLOAD_BYTES:
             raise HTTPException(status_code=413, detail="second image exceeds the upload limit")
         try:
-            second_frame = _decode_image(sec_data)
+            second_frame = await run_in_threadpool(_decode_image, sec_data)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=f"invalid second image: {error}") from error
 
@@ -1079,11 +1159,13 @@ async def inspect(request: Request):
         if second_upload is not None:
             raise HTTPException(status_code=400, detail="follow-up requests accept one new image")
         try:
-            session = capture_store.load(original_job_id)
+            session = await run_in_threadpool(capture_store.load, original_job_id)
         except (sqlite3.Error, OSError) as error:
             raise CaptureSessionError("capture storage is unavailable", 503) from error
         if profile_name != session.metadata["profile"]:
             raise CaptureSessionError("the inspection profile cannot change during recapture", 409)
+        if session.metadata.get("policy_fingerprint") != POLICY_FINGERPRINT:
+            raise CaptureSessionError("the inspection policy changed; start a new inspection", 409)
         if not session.metadata.get("can_recapture"):
             raise CaptureSessionError("this inspection already used its follow-up capture; start a new inspection", 409)
         if session.metadata["lighting"] == requested_second_lighting:
@@ -1100,7 +1182,7 @@ async def inspect(request: Request):
     if first_lighting not in allowed_lighting or requested_second_lighting not in allowed_lighting:
         raise CaptureSessionError("unsupported lighting condition")
 
-    job_id, _ = _execute_inspection_pipeline(
+    job_id, _ = await run_in_threadpool(_execute_inspection_pipeline,
         frame=frame,
         profile_name=profile_name,
         reference=reference,
@@ -1115,22 +1197,21 @@ async def inspect(request: Request):
 
 
 @app.get("/jobs/{job_id}")
-async def get_job(job_id: str):
+def get_job(job_id: str):
     """Returns the stored InspectionResult for the given job_id."""
     try:
         result = store.get(job_id)
-    except Exception as e:
-        logger.error(f"[get_job] store.get failed job_id={job_id}: {e}")
-        result = None
-    if result is None:
-        result = JOBS.get(job_id)
+    except (StorageUnavailable, CaptureSessionError):
+        raise
+    except Exception as error:
+        raise StorageUnavailable("inspection result could not be retrieved") from error
     if result is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return JSONResponse(result)
 
 
 @app.get("/jobs/{job_id}/captures/{index}")
-async def get_capture(job_id: str, index: int):
+def get_capture(job_id: str, index: int):
     """Return a retained analysis-space capture; expired evidence is never substituted."""
     if index not in (0, 1):
         raise HTTPException(status_code=404, detail="capture not found")
@@ -1145,3 +1226,14 @@ async def get_capture(job_id: str, index: int):
     if not ok:
         raise CaptureSessionError("could not render the retained capture", 503)
     return Response(encoded.tobytes(), media_type="image/png", headers={"Cache-Control": "private, no-store"})
+
+
+@app.get("/jobs/{job_id}/evidence")
+def export_evidence(job_id: str):
+    result = get_job(job_id)
+    session = capture_store.load(job_id)
+    data = build_evidence_bundle({**json.loads(result.body), "job_id": job_id}, session)
+    if len(data) > 4_000_000:
+        raise HTTPException(status_code=413, detail="This bundle exceeds the web download budget. Download JSON and individual capture images instead.")
+    return Response(data, media_type="application/zip", headers={"Cache-Control": "private, no-store",
+                    "Content-Disposition": 'attachment; filename="loopsight-evidence.zip"'})

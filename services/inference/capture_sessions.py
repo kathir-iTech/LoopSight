@@ -116,7 +116,12 @@ class SqliteCaptureSessionStore:
                 expired = False
         if expired:
             raise CaptureSessionError("capture session expired; start a new inspection", 410)
-        metadata = json.loads(row[2])
+        try:
+            metadata = json.loads(row[2])
+            if not isinstance(metadata, dict) or not isinstance(metadata.get("frame_sha256"), str):
+                raise ValueError("missing frame hash")
+        except (ValueError, TypeError) as error:
+            raise CaptureSessionError("stored capture metadata failed its integrity check", 503) from error
         if metadata.get("policy_version") != POLICY_VERSION:
             raise CaptureSessionError("the inspection policy changed; start a new inspection", 409)
         frame = cv2.imdecode(np.frombuffer(row[0], np.uint8), cv2.IMREAD_COLOR)

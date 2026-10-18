@@ -1,11 +1,10 @@
 """
-LoopSight v2 — JobStore abstraction with InMemory, SQLite persistent fallback, and DynamoDB.
+LoopSight job storage: explicit S3 or DynamoDB, otherwise local SQLite.
 
 Implementations:
   - InMemoryJobStore — wraps the in-memory JOBS dict (fast, zero-config default
-    with optional SQLite write-through when LOOP_SQLITE_PATH is set).
-  - SqliteJobStore   — lightweight persistent store using Python's built-in
-    sqlite3 so jobs survive worker restarts even without AWS credentials.
+    with SQLite write-through at LOOPSIGHT_SQLITE_PATH).
+  - S3JobStore — shared encrypted objects, size limits and application TTL.
   - DynamoJobStore   — uses boto3 + DYNAMO_TABLE_NAME when AWS credentials are
     resolvable.
 """
@@ -17,8 +16,12 @@ import os
 import logging
 import contextlib
 import sqlite3
+import time
+from capture_sessions import CaptureSessionError
 from pathlib import Path
 from typing import Dict, Optional, Protocol
+
+from cloud_storage import S3JobStore, S3Objects, StorageUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -32,63 +35,71 @@ class JobStore(Protocol):
 
 
 class InMemoryJobStore:
-    """Wraps the existing JOBS dict, with optional SQLite write-through so
-    multi-worker local or container runs never lose jobs."""
-
-    def __init__(self, backing: Optional[Dict[str, dict]] = None, sqlite_path: Optional[str] = None):
-        self._store: Dict[str, dict] = backing if backing is not None else {}
+    """Legacy name for bounded SQLite persistence; disk is authoritative on reads."""
+    def __init__(self, backing=None, sqlite_path=None, *, ttl_seconds=86400, max_jobs=100, clock=time.time):
+        self._store = backing if backing is not None else {}
         self._sqlite_path = sqlite_path or os.environ.get("LOOPSIGHT_SQLITE_PATH", "/tmp/loopsight_jobs.sqlite3")
-        self._init_sqlite()
-
-    def _init_sqlite(self) -> None:
-        if not self._sqlite_path:
-            return
+        if not 60 <= ttl_seconds <= 86400 or not 1 <= max_jobs <= 100:
+            raise ValueError("invalid local job retention limits")
+        self.ttl_seconds, self.max_jobs, self.clock = ttl_seconds, max_jobs, clock
         try:
             Path(self._sqlite_path).parent.mkdir(parents=True, exist_ok=True)
-            with contextlib.closing(sqlite3.connect(self._sqlite_path, timeout=5.0)) as conn, conn:
-                conn.execute(
-                    "CREATE TABLE IF NOT EXISTS jobs (job_id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)"
-                )
-        except Exception as e:
-            logger.debug(f"[InMemoryJobStore] sqlite write-through disabled: {e}")
-            self._sqlite_path = ""
+            with contextlib.closing(sqlite3.connect(self._sqlite_path, timeout=5)) as conn, conn:
+                conn.execute("CREATE TABLE IF NOT EXISTS jobs (job_id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP, expires_at REAL)")
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+                if "expires_at" not in columns:
+                    conn.execute("ALTER TABLE jobs ADD COLUMN expires_at REAL")
+                conn.execute("UPDATE jobs SET expires_at = COALESCE(CAST(strftime('%s', created_at) AS REAL), ?) + ? WHERE expires_at IS NULL",
+                             (self.clock(), self.ttl_seconds))
+        except (sqlite3.Error, OSError) as error:
+            raise StorageUnavailable("local job storage is unavailable") from error
 
-    def save(self, job_id: str, result: dict) -> None:
-        self._store[job_id] = result
-        if self._sqlite_path:
-            try:
-                payload = json.dumps(result, default=str)
-                with contextlib.closing(sqlite3.connect(self._sqlite_path, timeout=5.0)) as conn, conn:
-                    conn.execute(
-                        "INSERT OR REPLACE INTO jobs (job_id, payload) VALUES (?, ?)",
-                        (job_id, payload),
-                    )
-            except Exception as e:
-                logger.debug(f"[InMemoryJobStore] sqlite write-through save failed: {e}")
+    def save(self, job_id, result):
+        try:
+            payload = json.dumps(result, allow_nan=False)
+            if len(payload.encode()) > 6 * 1024 * 1024:
+                raise StorageUnavailable("inspection result exceeds the storage limit")
+            now = self.clock()
+            with contextlib.closing(sqlite3.connect(self._sqlite_path, timeout=5)) as conn, conn:
+                conn.execute("DELETE FROM jobs WHERE expires_at <= ?", (now,))
+                conn.execute("INSERT OR REPLACE INTO jobs (job_id, payload, expires_at) VALUES (?, ?, ?)",
+                             (job_id, payload, now + self.ttl_seconds))
+                while True:
+                    count, size = conn.execute("SELECT COUNT(*), COALESCE(SUM(LENGTH(payload)), 0) FROM jobs").fetchone()
+                    if count <= self.max_jobs and size <= 128 * 1024 * 1024:
+                        break
+                    conn.execute("DELETE FROM jobs WHERE job_id = (SELECT job_id FROM jobs ORDER BY created_at, rowid LIMIT 1)")
+        except StorageUnavailable:
+            raise
+        except Exception as error:
+            raise StorageUnavailable("local job storage write failed") from error
 
-    def get(self, job_id: str) -> Optional[dict]:
-        if job_id in self._store:
-            return self._store[job_id]
-        if self._sqlite_path:
-            try:
-                with contextlib.closing(sqlite3.connect(self._sqlite_path, timeout=5.0)) as conn, conn:
-                    row = conn.execute("SELECT payload FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
-                    if row and row[0]:
-                        loaded = json.loads(row[0])
-                        self._store[job_id] = loaded
-                        return loaded
-            except Exception as e:
-                logger.debug(f"[InMemoryJobStore] sqlite read failed: {e}")
-        return None
+    def get(self, job_id):
+        try:
+            expired = False
+            with contextlib.closing(sqlite3.connect(self._sqlite_path, timeout=5)) as conn, conn:
+                row = conn.execute("SELECT payload, expires_at FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+                if row is None:
+                    return None
+                if row[1] <= self.clock():
+                    expired = True
+                    conn.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
+            if expired:
+                raise CaptureSessionError("inspection result expired; start a new inspection", 410)
+            return json.loads(row[0])
+        except CaptureSessionError:
+            raise
+        except Exception as error:
+            raise StorageUnavailable("local job storage read failed") from error
 
     @property
-    def store(self) -> Dict[str, dict]:
-        """Expose backing dict for health checks / legacy access (e.g., len)."""
+    def store(self):
+        # Compatibility only. Results are intentionally not duplicated in RAM.
         return self._store
 
 
 class DynamoJobStore:
-    """DynamoDB-backed store. Only constructed when credentials are resolvable."""
+    """DynamoDB-backed store. Explicitly selected; outages are surfaced without local fallback."""
 
     def __init__(self, table_name: str):
         self.table_name = table_name
@@ -99,9 +110,7 @@ class DynamoJobStore:
         try:
             self._table.load()
         except Exception as e:
-            logger.warning(
-                f"[DynamoJobStore] table '{table_name}' not accessible at startup: {e} — runtime saves will log and degrade gracefully"
-            )
+            raise StorageUnavailable("configured DynamoDB table is unavailable") from e
 
     def save(self, job_id: str, result: dict) -> None:
         try:
@@ -109,7 +118,10 @@ class DynamoJobStore:
             from decimal import Decimal
 
             # Convert floats to Decimal for DynamoDB resource compatibility
-            clean_payload = json.loads(json.dumps(result, default=str), parse_float=Decimal)
+            serialized = json.dumps(result, allow_nan=False)
+            if len(serialized.encode()) > 350 * 1024:
+                raise StorageUnavailable("DynamoDB result too large; configure S3 job storage")
+            clean_payload = json.loads(serialized, parse_float=Decimal)
             self._table.put_item(
                 Item={
                     "job_id": job_id,
@@ -118,9 +130,7 @@ class DynamoJobStore:
                 }
             )
         except Exception as e:
-            logger.error(
-                f"[DynamoJobStore] save failed for job_id={job_id} table={self.table_name}: {e} — request will not crash"
-            )
+            raise StorageUnavailable("DynamoDB job storage write failed") from e
 
     def get(self, job_id: str) -> Optional[dict]:
         try:
@@ -131,38 +141,20 @@ class DynamoJobStore:
             raw = item.get("result")
             return json.loads(json.dumps(raw, default=float))
         except Exception as e:
-            logger.error(f"[DynamoJobStore] get failed for job_id={job_id} table={self.table_name}: {e}")
-            return None
-
-
-def _credentials_available() -> bool:
-    """Return True only if boto3 can resolve AWS credentials in this environment."""
-    try:
-        import boto3  # type: ignore
-
-        session = boto3.Session()
-        creds = session.get_credentials()
-        return creds is not None
-    except Exception as e:
-        logger.debug(f"[storage] boto3 credential check failed: {e}")
-        return False
+            raise StorageUnavailable("DynamoDB job storage read failed") from e
 
 
 def create_job_store(backing_dict: Optional[Dict[str, dict]] = None) -> JobStore:
-    """Factory used by main.py at startup."""
-    table_name = os.environ.get("DYNAMO_TABLE_NAME")
-    if table_name and _credentials_available():
+    """Explicit cloud configuration never silently falls back to local storage."""
+    bucket = os.environ.get("LOOPSIGHT_EVIDENCE_BUCKET", "").strip()
+    if bucket:
+        return S3JobStore(S3Objects(bucket), ttl_seconds=int(os.environ.get("LOOPSIGHT_JOB_TTL_SECONDS", "86400")))
+    table_name = os.environ.get("DYNAMO_TABLE_NAME", "").strip()
+    if table_name:
         try:
-            logger.info(f"[storage] using DynamoJobStore table={table_name}")
             return DynamoJobStore(table_name)
-        except Exception as e:
-            logger.warning(
-                f"[storage] failed to init DynamoJobStore table={table_name}: {e} — falling back to InMemoryJobStore"
-            )
-            return InMemoryJobStore(backing_dict)
-    else:
-        if table_name and not _credentials_available():
-            logger.info("[storage] DYNAMO_TABLE_NAME set but no AWS credentials resolvable — using InMemoryJobStore")
-        else:
-            logger.info("[storage] using InMemoryJobStore (with SQLite write-through)")
-        return InMemoryJobStore(backing_dict)
+        except StorageUnavailable:
+            raise
+        except Exception as error:
+            raise StorageUnavailable("configured DynamoDB is unavailable") from error
+    return InMemoryJobStore(backing_dict)
